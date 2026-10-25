@@ -51,8 +51,8 @@ class TemplateVariable(Base):
     key = Column(String, nullable=False)
     label = Column(String, nullable=False)
     type = Column(String, default="custom") # person_name, organization, date, address, money, phone, email, identifier, role, location, custom
-    required = Column(Boolean, default=True)
-    status = Column(String, default="pending") # pending, approved, excluded
+    required = Column(Boolean, default=False)
+    status = Column(String, default="active")
     default_value = Column(String, nullable=True)
     description = Column(String, nullable=True)
     confidence = Column(String, nullable=True)

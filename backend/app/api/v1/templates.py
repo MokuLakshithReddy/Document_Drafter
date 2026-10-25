@@ -65,7 +65,7 @@ def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
             label=v.label,
             type=v.type,
             required=v.required,
-            status=v.status,
+            status=v.status or "active",
             default_value=v.replacement_value,
             confidence=str(v.confidence) if v.confidence else "1.0",
             description=v.reason
@@ -248,45 +248,44 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             details={"template_checksum": t.source_checksum, "current_checksum": current_checksum}
         )
 
-    # 3. Check required variables and build replacement instructions (Strict Approval-First)
-    approved_replacements: List[Dict[str, Any]] = []
-    excluded_texts: List[str] = []
+    # 3. Build replacement instructions according to the simple rule:
+    # If the user enters a non-empty new value, replace the corresponding original value.
+    # If the user leaves the field blank, null, or omits it, leave the original document content unchanged.
+    active_replacements: List[Dict[str, Any]] = []
+    unmodified_original_texts: List[str] = []
 
     for var in t.variables:
-        # Strict rule: ONLY approved variables can be replaced.
-        # Pending and excluded fields remain untouched!
-        if var.status != "approved":
+        # Resolve raw value provided by variable id, client_id, or key
+        raw_val = None
+        if req.values:
+            if var.id in req.values:
+                raw_val = req.values[var.id]
+            elif var.client_id and var.client_id in req.values:
+                raw_val = req.values[var.client_id]
+            elif var.key in req.values:
+                raw_val = req.values[var.key]
+
+        # Missing, null, empty, or whitespace-only means "keep original unchanged"
+        if raw_val is None or not isinstance(raw_val, str) or not raw_val.strip():
             for occ in var.occurrences:
-                excluded_texts.append(occ.original_text)
+                unmodified_original_texts.append(occ.original_text)
             continue
 
-        # Look for value provided by key or by id or client_id
-        val = req.values.get(var.id) or (req.values.get(var.client_id) if var.client_id else None) or req.values.get(var.key) or var.default_value or ""
-        if var.required and not val.strip():
-            raise AppException(
-                code=AppErrorCode.INVALID_VALUE,
-                message=f"Missing required value for variable '{var.label}' ({var.key})",
-                details={"variable_key": var.key}
-            )
-
-        if not val.strip():
-            # Leave original value unchanged
-            continue
+        new_val = raw_val.strip()
 
         # Build replacement entries for each occurrence with exact locators
         for occ in var.occurrences:
-            if occ.status == "active":
-                loc = occ.source_locator or {}
-                approved_replacements.append({
-                    "occurrence_id": occ.id,
-                    "container_id": loc.get("container_id", "body/p[0]"),
-                    "original_text": occ.original_text,
-                    "new_text": val,
-                    "char_start": loc.get("char_start"),
-                    "char_end": loc.get("char_end"),
-                    "page": loc.get("page"),
-                    "bbox": loc.get("bbox")
-                })
+            loc = occ.source_locator or {}
+            active_replacements.append({
+                "occurrence_id": occ.id,
+                "container_id": loc.get("container_id", "body/p[0]"),
+                "original_text": occ.original_text,
+                "new_text": new_val,
+                "char_start": loc.get("char_start"),
+                "char_end": loc.get("char_end"),
+                "page": loc.get("page"),
+                "bbox": loc.get("bbox")
+            })
 
     # 4. Create independent Generation Job
     job = GenerationJob(
@@ -300,12 +299,20 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
 
     # Snapshot values (FR-14)
     for var in t.variables:
-        val = req.values.get(var.id) or req.values.get(var.key) or var.default_value or ""
+        val = None
+        if req.values:
+            if var.id in req.values:
+                val = req.values[var.id]
+            elif var.client_id and var.client_id in req.values:
+                val = req.values[var.client_id]
+            elif var.key in req.values:
+                val = req.values[var.key]
+        val_str = str(val).strip() if val and isinstance(val, str) else ""
         db.add(GenerationValue(
             job_id=job.id,
             variable_id=var.id,
             variable_key=var.key,
-            value=val
+            value=val_str
         ))
 
     # 5. Create working copy and execute replacements
@@ -316,7 +323,7 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
         final_gen_path = settings.generated_path / final_gen_filename
 
         if doc.format == "docx":
-            DocxReplacer.apply_replacements(working_copy, approved_replacements)
+            DocxReplacer.apply_replacements(working_copy, active_replacements)
             if target_format == "pdf":
                 # Convert DOCX working copy to PDF using FormatConverter
                 FormatConverter.convert_docx_to_pdf(working_copy, final_gen_path)
@@ -328,7 +335,7 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
                 import shutil
                 shutil.move(str(working_copy), str(final_gen_path))
         else:
-            PdfReplacer.apply_replacements(working_copy, approved_replacements)
+            PdfReplacer.apply_replacements(working_copy, active_replacements)
             import shutil
             shutil.move(str(working_copy), str(final_gen_path))
 
@@ -336,8 +343,8 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
         val_report = PostGeneratorValidator.validate(
             generated_path=final_gen_path,
             fmt=target_format,
-            intended_replacements=approved_replacements,
-            excluded_texts=excluded_texts,
+            intended_replacements=active_replacements,
+            excluded_texts=unmodified_original_texts,
             source_path=original_file_path if target_format == doc.format else None
         )
 

@@ -39,8 +39,8 @@ export interface VariableItem {
   occurrence_ids: string[];
   confidence?: number;
   reason?: string;
-  required: boolean;
-  status: 'pending' | 'approved' | 'excluded';
+  required?: boolean;
+  status?: string;
 }
 
 export interface DocumentInfo {

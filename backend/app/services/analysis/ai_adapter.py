@@ -147,7 +147,7 @@ class CloudAIAdapter(BaseAIAdapter):
                                 confidence=float(v.get("confidence", 0.9)),
                                 reason=v.get("reason", "AI suggested field"),
                                 required=False,
-                                status="pending"
+                                status="active"
                             )
                         )
                         for oid in filtered_occ_ids:

@@ -50,8 +50,8 @@ class VariableDTO(BaseModel):
     occurrence_ids: List[str] = Field(default_factory=list)
     confidence: Optional[float] = 1.0
     reason: Optional[str] = None
-    required: bool = True
-    status: str = "pending" # pending, approved, excluded
+    required: bool = False
+    status: Optional[str] = "active"
 
 # Analysis Schemas
 class AnalysisResultDTO(BaseModel):
@@ -108,7 +108,7 @@ class UpdateVariableRequest(BaseModel):
 
 # Generation Schemas
 class GenerateDocumentRequest(BaseModel):
-    values: Dict[str, str] # map of variable_id or variable_key -> new value
+    values: Dict[str, Optional[str]] = Field(default_factory=dict) # map of variable_id or variable_key -> new value
     output_format: Optional[str] = "docx" # docx or pdf
 
 class ValidationIssue(BaseModel):

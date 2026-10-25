@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
 import {
-  Check,
-  X,
   Split,
   Plus,
   Save,
@@ -10,6 +8,7 @@ import {
   MapPin,
   Eye,
   SlidersHorizontal,
+  FileCheck2,
 } from 'lucide-react';
 import type { AnalysisResult, VariableItem, Occurrence, VariableType } from '../../types';
 
@@ -37,22 +36,14 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
   const [newVarType, setNewVarType] = useState<VariableType>('custom');
   const [newVarOrigValue, setNewVarOrigValue] = useState('');
 
-  // Set explicit status: approved, excluded, or pending
-  const setStatus = (id: string, status: 'approved' | 'excluded' | 'pending') => {
+  // Update label
+  const updateLabel = (id: string, label: string) => {
     setVariables((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, status } : v))
+      prev.map((v) => (v.id === id ? { ...v, label } : v))
     );
   };
 
-  const approveAll = () => {
-    setVariables((prev) => prev.map((v) => ({ ...v, status: 'approved' })));
-  };
-
-  const excludeAll = () => {
-    setVariables((prev) => prev.map((v) => ({ ...v, status: 'excluded' })));
-  };
-
-  // Update field value
+  // Update replacement value
   const updateReplacement = (id: string, val: string) => {
     setVariables((prev) =>
       prev.map((v) => (v.id === id ? { ...v, replacement_value: val } : v))
@@ -76,7 +67,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
       confidence: v.confidence,
       reason: 'Split occurrence separated by user',
       required: false,
-      status: 'approved',
+      status: 'active',
     };
 
     // Update occurrences mapping
@@ -124,7 +115,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
       confidence: 1.0,
       reason: 'Manually added by user',
       required: false,
-      status: 'approved',
+      status: 'active',
     };
 
     setOccurrences((prev) => [...prev, newOcc]);
@@ -153,7 +144,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
             />
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-            Detected {variables.length} variable candidates across {occurrences.length} structural locations.
+            Detected {variables.length} variables across {occurrences.length} structural locations. Enter optional new values, or leave blank to keep original text.
           </div>
         </div>
 
@@ -190,7 +181,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
           <div>
             <div style={{ fontWeight: 700, fontSize: 14 }}>Scanned Document Detected (OCR Limitation)</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              {analysis.warning || 'This document contains non-selectable image layers. In accordance with MVP specification, OCR is not supported; automatic variable extraction requires selectable text.'}
+              {analysis.warning || 'This document contains non-selectable image layers. Automatic variable extraction requires selectable text.'}
             </div>
           </div>
         </div>
@@ -226,10 +217,9 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
             {analysis.extracted_text_preview || 'No text extracted from document.'}
           </div>
 
-          {/* Quick instructions */}
           <div style={{ marginTop: 14, fontSize: 12, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <Info size={14} />
-            Review candidates on the right. Approved variables will be replaceable in your generated documents.
+            Review detected variables on the right. Any field left blank or omitted will keep its original text in the document.
           </div>
         </div>
 
@@ -238,34 +228,17 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <h4 style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
               <SlidersHorizontal size={16} color="#a855f7" />
-              Variable Candidates ({variables.length})
+              Detected Variables ({variables.length})
             </h4>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                onClick={approveAll}
-                className="btn btn-secondary"
-                style={{ padding: '3px 8px', fontSize: 11, color: '#34d399' }}
-              >
-                Approve All
-              </button>
-              <button
-                onClick={excludeAll}
-                className="btn btn-secondary"
-                style={{ padding: '3px 8px', fontSize: 11, color: '#f87171' }}
-              >
-                Exclude All
-              </button>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 4 }}>
-                {variables.filter((v) => v.status === 'approved').length} approved
-              </div>
+            <div style={{ fontSize: 12, color: '#34d399', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <FileCheck2 size={14} />
+              Blank fields remain unchanged
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 580, overflowY: 'auto', paddingRight: 4 }}>
             {variables.map((v) => {
-              const isApproved = v.status === 'approved';
-              const isPending = v.status === 'pending';
-              const isExcluded = v.status === 'excluded';
+              const hasCustomValue = Boolean(v.replacement_value && v.replacement_value.trim());
 
               return (
                 <div
@@ -273,31 +246,37 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
                   className="glass-panel"
                   style={{
                     padding: 14,
-                    border: isApproved
-                      ? '1px solid rgba(16, 185, 129, 0.4)'
-                      : isPending
-                      ? '1px solid rgba(245, 158, 11, 0.4)'
-                      : '1px solid rgba(255, 255, 255, 0.05)',
-                    background: isApproved
-                      ? 'rgba(6, 78, 59, 0.25)'
-                      : isPending
-                      ? 'rgba(120, 53, 15, 0.2)'
-                      : 'rgba(15, 23, 42, 0.4)',
-                    opacity: isExcluded ? 0.6 : 1,
+                    border: hasCustomValue
+                      ? '1px solid rgba(99, 102, 241, 0.45)'
+                      : '1px solid rgba(255, 255, 255, 0.08)',
+                    background: hasCustomValue
+                      ? 'rgba(30, 41, 59, 0.75)'
+                      : 'rgba(15, 23, 42, 0.45)',
                     transition: 'all 0.2s',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
                       <span className={`badge badge-${v.type}`}>{v.type}</span>
-                      <strong style={{ fontSize: 14, color: isApproved ? '#fff' : isPending ? '#fcd34d' : 'var(--text-muted)' }}>
-                        {v.label}
-                      </strong>
-                      {isPending && (
-                        <span style={{ fontSize: 10, background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>
-                          PENDING
-                        </span>
-                      )}
+                      <input
+                        type="text"
+                        value={v.label}
+                        onChange={(e) => updateLabel(v.id, e.target.value)}
+                        className="input-field"
+                        style={{
+                          fontWeight: 700,
+                          fontSize: 13,
+                          padding: '2px 8px',
+                          background: 'transparent',
+                          border: '1px solid transparent',
+                          borderRadius: 4,
+                          color: '#fff',
+                          width: '70%',
+                        }}
+                        onFocus={(e) => (e.target.style.borderColor = 'var(--accent-primary)')}
+                        onBlur={(e) => (e.target.style.borderColor = 'transparent')}
+                        title="Click to edit field label"
+                      />
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -311,75 +290,16 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
                         <MapPin size={12} />
                         {v.occurrence_ids.length} occ
                       </button>
-
-                      {/* Action buttons */}
-                      {isPending ? (
-                        <>
-                          <button
-                            onClick={() => setStatus(v.id, 'approved')}
-                            style={{
-                              background: 'rgba(16, 185, 129, 0.25)',
-                              color: '#34d399',
-                              border: '1px solid rgba(16, 185, 129, 0.5)',
-                              borderRadius: 6,
-                              padding: '4px 8px',
-                              fontSize: 11,
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                            }}
-                          >
-                            <Check size={12} /> Approve
-                          </button>
-                          <button
-                            onClick={() => setStatus(v.id, 'excluded')}
-                            style={{
-                              background: 'rgba(239, 68, 68, 0.15)',
-                              color: '#f87171',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              borderRadius: 6,
-                              padding: '4px 8px',
-                              fontSize: 11,
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Exclude
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={() => setStatus(v.id, isApproved ? 'excluded' : 'approved')}
-                          style={{
-                            background: isApproved ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-                            color: isApproved ? '#34d399' : '#f87171',
-                            border: `1px solid ${isApproved ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
-                            borderRadius: 6,
-                            padding: '4px 8px',
-                            fontSize: 11,
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          {isApproved ? <Check size={12} /> : <X size={12} />}
-                          {isApproved ? 'Approved' : 'Excluded'}
-                        </button>
-                      )}
                     </div>
                   </div>
 
                   {/* Values grid (original vs replacement) */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 4 }}>
                     <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 2 }}>Original in Source:</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>Original in Source:</div>
                       <div style={{
                         background: 'rgba(0,0,0,0.3)',
-                        padding: '6px 10px',
+                        padding: '8px 10px',
                         borderRadius: 6,
                         fontSize: 12,
                         fontFamily: 'monospace',
@@ -393,22 +313,28 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
                     </div>
 
                     <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 2 }}>Default Replacement:</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
+                        New Replacement Value:
+                      </div>
                       <input
                         type="text"
+                        className="input-field"
+                        placeholder="Leave blank to keep original"
                         value={v.replacement_value || ''}
                         onChange={(e) => updateReplacement(v.id, e.target.value)}
-                        placeholder="(Blank by default)"
-                        className="input-field"
-                        style={{ padding: '5px 8px', fontSize: 12 }}
+                        style={{
+                          fontSize: 12,
+                          padding: '8px 10px',
+                          borderColor: hasCustomValue ? 'var(--accent-primary)' : undefined,
+                        }}
                       />
                     </div>
                   </div>
 
-                  {/* Reason & Hint */}
-                  <div style={{ fontSize: 11, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>{v.reason || 'Detected pattern'}</span>
-                    <span>Confidence: {(v.confidence ? v.confidence * 100 : 90).toFixed(0)}%</span>
+                  <div style={{ fontSize: 11, color: hasCustomValue ? '#818cf8' : 'var(--text-dim)', marginTop: 4 }}>
+                    {hasCustomValue
+                      ? `Will replace with: "${v.replacement_value}"`
+                      : 'Will leave original document content unchanged'}
                   </div>
                 </div>
               );
@@ -417,62 +343,53 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
         </div>
       </div>
 
-      {/* Occurrence Inspector & Split Modal (AT-08) */}
+      {/* Inspect Occurrences / Split Modal (AT-08) */}
       {inspectingOccurrencesFor && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: 500, padding: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <div>
-                <h4 style={{ fontSize: 16, fontWeight: 700 }}>Inspect Occurrences</h4>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                  Variable: <strong>{inspectingOccurrencesFor.label}</strong> ("{inspectingOccurrencesFor.original_value}")
-                </div>
-              </div>
-              <button
-                onClick={() => setInspectingOccurrencesFor(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14 }}>
-              This variable appears in {inspectingOccurrencesFor.occurrence_ids.length} locations. If an occurrence refers to a different context or entity, you can split it into an independent variable.
+          <div className="modal-content" style={{ maxWidth: 600 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MapPin size={18} color="#818cf8" />
+              Occurrences for: {inspectingOccurrencesFor.label}
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Original text: <code style={{ color: '#818cf8' }}>{inspectingOccurrencesFor.original_value}</code>
             </p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 300, overflowY: 'auto', marginBottom: 20 }}>
               {inspectingOccurrencesFor.occurrence_ids.map((occId, idx) => {
                 const occ = occurrences.find((o) => o.id === occId);
                 return (
                   <div
                     key={occId}
                     style={{
-                      background: 'rgba(0, 0, 0, 0.3)',
+                      background: 'rgba(255, 255, 255, 0.03)',
                       border: '1px solid var(--border-subtle)',
                       borderRadius: 8,
-                      padding: 10,
+                      padding: 12,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>
                         Occurrence #{idx + 1} ({occId})
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'monospace' }}>
-                        Location: {occ?.source_locator.container_id || 'paragraph'}
+                        Location: {occ?.source_locator.container_id}
+                        {occ?.source_locator.page !== undefined ? ` · Page ${occ.source_locator.page + 1}` : ''}
                       </div>
                     </div>
 
                     {inspectingOccurrencesFor.occurrence_ids.length > 1 && (
                       <button
                         className="btn btn-secondary"
-                        style={{ padding: '4px 8px', fontSize: 11 }}
+                        style={{ fontSize: 11, padding: '4px 8px' }}
                         onClick={() => handleSplitOccurrence(inspectingOccurrencesFor, occId)}
+                        title="Isolate this occurrence into an independent variable"
                       >
                         <Split size={12} />
-                        Split Into Separate Variable
+                        Isolate Occurrence
                       </button>
                     )}
                   </div>
@@ -492,25 +409,17 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
       {/* Manual Add Variable Modal */}
       {showAddModal && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: 440, padding: 24 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-              <h4 style={{ fontSize: 16, fontWeight: 700 }}>Add Custom Variable</h4>
-              <button
-                onClick={() => setShowAddModal(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={18} />
-              </button>
-            </div>
+          <div className="modal-content" style={{ maxWidth: 480 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Add Variable</h3>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>
-                  Field Label
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                  Variable Label
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Project Code"
+                  placeholder="e.g. Employee Name, Start Date"
                   value={newVarLabel}
                   onChange={(e) => setNewVarLabel(e.target.value)}
                   className="input-field"
@@ -518,8 +427,21 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
               </div>
 
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>
-                  Entity Type
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                  Original Text Exactly in Document
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Rahul Sharma"
+                  value={newVarOrigValue}
+                  onChange={(e) => setNewVarOrigValue(e.target.value)}
+                  className="input-field"
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+                  Variable Type
                 </label>
                 <select
                   value={newVarType}
@@ -530,36 +452,22 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
                   <option value="person_name">Person Name</option>
                   <option value="organization">Organization</option>
                   <option value="date">Date</option>
-                  <option value="money">Money / Amount</option>
-                  <option value="role">Role / Title</option>
+                  <option value="address">Address</option>
+                  <option value="money">Money</option>
                   <option value="email">Email</option>
-                  <option value="phone">Phone Number</option>
-                  <option value="identifier">Identifier / Code</option>
+                  <option value="phone">Phone</option>
+                  <option value="role">Role / Title</option>
                 </select>
               </div>
 
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>
-                  Original Text in Document to Replace
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. PRJ-2026"
-                  value={newVarOrigValue}
-                  onChange={(e) => setNewVarOrigValue(e.target.value)}
-                  className="input-field"
-                />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
+                <button className="btn btn-secondary" onClick={() => setShowAddModal(false)}>
+                  Cancel
+                </button>
+                <button className="btn btn-primary" onClick={handleAddVariable}>
+                  Add Variable
+                </button>
               </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button className="btn btn-secondary" onClick={() => setShowAddModal(false)}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" onClick={handleAddVariable}>
-                <Plus size={14} />
-                Add Variable
-              </button>
             </div>
           </div>
         </div>

@@ -173,7 +173,7 @@ class CandidateDetector:
                 confidence=0.92,
                 reason=f"Detected {v_type} pattern with {len(occ_ids)} occurrence(s)",
                 required=False,
-                status="pending"
+                status="active"
             )
             # Link occurrences to this variable
             for occ in occurrences:
