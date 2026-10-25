@@ -40,7 +40,7 @@ export interface VariableItem {
   confidence?: number;
   reason?: string;
   required: boolean;
-  status: 'approved' | 'excluded';
+  status: 'pending' | 'approved' | 'excluded';
 }
 
 export interface DocumentInfo {
@@ -112,6 +112,7 @@ export interface GenerationJob {
   id: string;
   template_id: string;
   template_version: number;
+  output_format?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   created_at: string;
   error_code?: string;

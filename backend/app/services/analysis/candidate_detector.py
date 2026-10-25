@@ -32,6 +32,18 @@ class CandidateDetector:
         r'(?:First|Second|Third)\s+party[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
     ]
 
+    # Organization patterns
+    ORG_PATTERNS = [
+        r'\b[A-Z][A-Za-z0-9&.,\'\- ]{2,35}\s+(?:LLC|Inc\.?|Corp\.?|Corporation|Ltd\.?|Limited|GmbH|Technologies|Enterprises|Solutions|Group|Services|Holdings|Bank|University|Agency)\b',
+        r'(?:Company|Employer|Organization|Client|Firm|Institution)[:\s]+([A-Z][A-Za-z0-9&.,\'\- ]{2,35})',
+    ]
+
+    # Address patterns
+    ADDRESS_PATTERNS = [
+        r'\b\d{1,5}\s+[A-Za-z0-9.,\- ]+\s+(?:Street|St\.?|Avenue|Ave\.?|Boulevard|Blvd\.?|Road|Rd\.?|Drive|Dr\.?|Lane|Ln\.?|Court|Ct\.?|Way|Parkway|Pkwy\.?|Suite|Ste\.?|Apt\.?)(?:[,\s]+[A-Za-z\s]+[,\s]+[A-Z]{2}\s+\d{5}(?:-\d{4})?)?\b',
+        r'\b(?:P\.?O\.?\s*Box\s+\d+)\b',
+    ]
+
     COMMON_TITLES = {"Appointment Letter", "Employment Agreement", "United States", "Acme Technologies", "Terms And", "Director Of"}
     NAME_REGEX = r'\b([A-Z][a-z]{2,15}\s+[A-Z][a-z]{2,15})\b'
 
@@ -85,10 +97,24 @@ class CandidateDetector:
             for p in cls.NAME_CONTEXT_PATTERNS:
                 for m in re.finditer(p, text):
                     name_val = m.group(1).strip()
-                    # Find exact substring span for the name
                     n_start = text.find(name_val, m.start())
                     if n_start != -1:
                         matches.append((name_val, "person_name", "Person Name", n_start, n_start + len(name_val)))
+
+            # Organizations
+            for p in cls.ORG_PATTERNS:
+                for m in re.finditer(p, text):
+                    org_val = m.group(1).strip() if m.lastindex and m.lastindex >= 1 else m.group(0).strip()
+                    o_start = text.find(org_val, m.start())
+                    if o_start != -1:
+                        matches.append((org_val, "organization", "Organization", o_start, o_start + len(org_val)))
+
+            # Addresses
+            for p in cls.ADDRESS_PATTERNS:
+                for m in re.finditer(p, text):
+                    addr_val = m.group(0).strip()
+                    a_start = m.start()
+                    matches.append((addr_val, "address", "Address", a_start, a_start + len(addr_val)))
 
             # Deduplicate overlapping matches within the same unit
             matches = sorted(matches, key=lambda x: (x[3], -(x[4] - x[3])))
@@ -147,7 +173,7 @@ class CandidateDetector:
                 confidence=0.92,
                 reason=f"Detected {v_type} pattern with {len(occ_ids)} occurrence(s)",
                 required=False,
-                status="approved"
+                status="pending"
             )
             # Link occurrences to this variable
             for occ in occurrences:

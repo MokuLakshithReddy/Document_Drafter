@@ -27,6 +27,7 @@ from app.schemas.api_schemas import (
 from app.services.storage.storage_manager import StorageManager
 from app.services.replacement.docx_replacer import DocxReplacer
 from app.services.replacement.pdf_replacer import PdfReplacer
+from app.services.generation.format_converter import FormatConverter
 from app.services.validation.post_generator_validator import PostGeneratorValidator
 from app.core.errors import AppException, AppErrorCode
 from app.core.logging import log_event
@@ -83,6 +84,10 @@ def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
                 matched_occ = next((o for o in _analysis_cache[doc.id].occurrences if o.id == occ_id), None)
                 if matched_occ:
                     loc = matched_occ.source_locator.model_dump()
+            elif doc.analysis_json and "occurrences" in doc.analysis_json:
+                matched_raw = next((o for o in doc.analysis_json["occurrences"] if o.get("id") == occ_id), None)
+                if matched_raw:
+                    loc = matched_raw.get("source_locator", loc)
 
             occ_record = VariableOccurrence(
                 id=occ_uid,
@@ -225,7 +230,16 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
     if not original_file_path.exists():
         raise AppException(code=AppErrorCode.DOCUMENT_NOT_FOUND, message="Original source file not found on disk")
 
-    # 1. Source Checksum validation (AT-12)
+    # 1. Output format resolution and support check
+    req_fmt = (req.output_format or doc.format).lower()
+    if doc.format == "pdf" and req_fmt == "docx":
+        raise AppException(
+            code=AppErrorCode.UNSUPPORTED_FORMAT,
+            message="PDF to DOCX conversion is not supported. Please select PDF output format."
+        )
+    target_format = req_fmt if req_fmt in ["docx", "pdf"] else doc.format
+
+    # 2. Source Checksum validation
     current_checksum = StorageManager.compute_sha256(original_file_path)
     if current_checksum != t.source_checksum:
         raise AppException(
@@ -234,13 +248,14 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             details={"template_checksum": t.source_checksum, "current_checksum": current_checksum}
         )
 
-    # 2. Check required variables and build replacement instructions
+    # 3. Check required variables and build replacement instructions (Strict Approval-First)
     approved_replacements: List[Dict[str, Any]] = []
     excluded_texts: List[str] = []
 
     for var in t.variables:
-        # Check if variable is approved or excluded
-        if var.status == "excluded":
+        # Strict rule: ONLY approved variables can be replaced.
+        # Pending and excluded fields remain untouched!
+        if var.status != "approved":
             for occ in var.occurrences:
                 excluded_texts.append(occ.original_text)
             continue
@@ -258,22 +273,26 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             # Leave original value unchanged
             continue
 
-        # Build replacement entries for each occurrence
+        # Build replacement entries for each occurrence with exact locators
         for occ in var.occurrences:
             if occ.status == "active":
+                loc = occ.source_locator or {}
                 approved_replacements.append({
                     "occurrence_id": occ.id,
-                    "container_id": occ.source_locator.get("container_id", "body/p[0]") if occ.source_locator else "body/p[0]",
+                    "container_id": loc.get("container_id", "body/p[0]"),
                     "original_text": occ.original_text,
                     "new_text": val,
-                    "page": occ.source_locator.get("page") if occ.source_locator else None,
-                    "bbox": occ.source_locator.get("bbox") if occ.source_locator else None
+                    "char_start": loc.get("char_start"),
+                    "char_end": loc.get("char_end"),
+                    "page": loc.get("page"),
+                    "bbox": loc.get("bbox")
                 })
 
-    # 3. Create independent Generation Job
+    # 4. Create independent Generation Job
     job = GenerationJob(
         template_id=t.id,
         template_version=t.version,
+        output_format=target_format,
         status="processing"
     )
     db.add(job)
@@ -289,27 +308,37 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             value=val
         ))
 
-    # 4. Create working copy and execute replacements
+    # 5. Create working copy and execute replacements
     working_copy = StorageManager.create_working_copy(original_file_path, prefix=f"job_{job.id[:8]}")
 
     try:
+        final_gen_filename = f"gen_{job.id}.{target_format}"
+        final_gen_path = settings.generated_path / final_gen_filename
+
         if doc.format == "docx":
             DocxReplacer.apply_replacements(working_copy, approved_replacements)
+            if target_format == "pdf":
+                # Convert DOCX working copy to PDF using FormatConverter
+                FormatConverter.convert_docx_to_pdf(working_copy, final_gen_path)
+                try:
+                    working_copy.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            else:
+                import shutil
+                shutil.move(str(working_copy), str(final_gen_path))
         else:
             PdfReplacer.apply_replacements(working_copy, approved_replacements)
-
-        # 5. Move working copy to generated/
-        final_gen_filename = f"gen_{job.id}.{doc.format}"
-        final_gen_path = settings.generated_path / final_gen_filename
-        import shutil
-        shutil.move(str(working_copy), str(final_gen_path))
+            import shutil
+            shutil.move(str(working_copy), str(final_gen_path))
 
         # 6. Post-generation validation (FR-10, Section 11)
         val_report = PostGeneratorValidator.validate(
             generated_path=final_gen_path,
-            fmt=doc.format,
+            fmt=target_format,
             intended_replacements=approved_replacements,
-            excluded_texts=excluded_texts
+            excluded_texts=excluded_texts,
+            source_path=original_file_path if target_format == doc.format else None
         )
 
         job.status = "completed" if val_report.status != "failed" else "failed"
@@ -321,7 +350,7 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
         gen_sha256 = StorageManager.compute_sha256(final_gen_path)
         gen_doc = GeneratedDocument(
             job_id=job.id,
-            format=doc.format,
+            format=target_format,
             storage_path=str(final_gen_path),
             sha256=gen_sha256,
             validation_status=val_report.status
@@ -335,6 +364,7 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             id=job.id,
             template_id=job.template_id,
             template_version=job.template_version,
+            output_format=target_format,
             status=job.status,
             created_at=job.created_at,
             error_code=job.error_code,

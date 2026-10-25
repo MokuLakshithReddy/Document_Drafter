@@ -22,6 +22,7 @@ class Document(Base):
     status = Column(String, default="uploaded") # uploaded, analyzing, analyzed, error
     page_count = Column(Integer, default=1)
     error_message = Column(Text, nullable=True)
+    analysis_json = Column(JSON, nullable=True)
 
     templates = relationship("Template", back_populates="source_document", cascade="all, delete-orphan")
 
@@ -51,7 +52,7 @@ class TemplateVariable(Base):
     label = Column(String, nullable=False)
     type = Column(String, default="custom") # person_name, organization, date, address, money, phone, email, identifier, role, location, custom
     required = Column(Boolean, default=True)
-    status = Column(String, default="approved") # approved, excluded
+    status = Column(String, default="pending") # pending, approved, excluded
     default_value = Column(String, nullable=True)
     description = Column(String, nullable=True)
     confidence = Column(String, nullable=True)
@@ -76,6 +77,7 @@ class GenerationJob(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     template_id = Column(String, ForeignKey("templates.id", ondelete="CASCADE"), nullable=False)
     template_version = Column(Integer, nullable=False)
+    output_format = Column(String, default="docx") # docx, pdf
     status = Column(String, default="pending") # pending, processing, completed, failed
     created_at = Column(DateTime, default=utc_now)
     error_code = Column(String, nullable=True)

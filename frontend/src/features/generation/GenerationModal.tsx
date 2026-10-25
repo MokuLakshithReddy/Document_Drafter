@@ -145,10 +145,18 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
             border: '1px solid var(--border-subtle)',
             marginBottom: 20,
           }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Target Output Format:</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Target Output Format:</div>
+              {template.source_format === 'pdf' && (
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  (PDF-to-Word conversion is not supported; outputs as PDF)
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 type="button"
+                disabled={template.source_format === 'pdf'}
                 onClick={() => setOutputFormat('docx')}
                 style={{
                   background: outputFormat === 'docx' ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.05)',
@@ -158,8 +166,10 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
                   padding: '6px 14px',
                   fontSize: 12,
                   fontWeight: 600,
-                  cursor: 'pointer',
+                  cursor: template.source_format === 'pdf' ? 'not-allowed' : 'pointer',
+                  opacity: template.source_format === 'pdf' ? 0.4 : 1,
                 }}
+                title={template.source_format === 'pdf' ? 'PDF to DOCX conversion is not supported' : 'Generate DOCX'}
               >
                 Word (.docx)
               </button>

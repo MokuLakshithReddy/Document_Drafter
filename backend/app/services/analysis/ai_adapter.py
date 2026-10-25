@@ -124,27 +124,34 @@ class CloudAIAdapter(BaseAIAdapter):
                     raw_json_str = data["candidates"][0]["content"]["parts"][0]["text"]
                     ai_result = json.loads(raw_json_str)
 
-                # Validate AI output against real occurrence IDs
+                # Validate AI output against real occurrence IDs and source locators
+                occ_map = {occ.id: occ for occ in base_occurrences}
                 sanitized_vars: List[VariableDTO] = []
                 for v in ai_result.get("variables", []):
-                    # Filter occurrence IDs to ONLY those that truly exist
-                    filtered_occ_ids = [oid for oid in v.get("occurrence_ids", []) if oid in valid_occ_ids]
+                    # Filter occurrence IDs to ONLY those that truly exist and have valid locators
+                    filtered_occ_ids = [
+                        oid for oid in v.get("occurrence_ids", [])
+                        if oid in occ_map and occ_map[oid].source_locator.container_id
+                    ]
                     if filtered_occ_ids:
                         v_id = f"var_ai_{len(sanitized_vars)+1}"
+                        orig_val = v.get("original_value") or occ_map[filtered_occ_ids[0]].original_text
                         sanitized_vars.append(
                             VariableDTO(
                                 id=v_id,
                                 key=v.get("key", f"var_{len(sanitized_vars)+1}"),
                                 label=v.get("label", "Custom Field"),
                                 type=v.get("type", "custom"),
-                                original_value=v.get("original_value", ""),
+                                original_value=orig_val,
                                 occurrence_ids=filtered_occ_ids,
                                 confidence=float(v.get("confidence", 0.9)),
                                 reason=v.get("reason", "AI suggested field"),
                                 required=False,
-                                status="approved"
+                                status="pending"
                             )
                         )
+                        for oid in filtered_occ_ids:
+                            occ_map[oid].variable_id = v_id
                 
                 if sanitized_vars:
                     return AnalysisResultDTO(

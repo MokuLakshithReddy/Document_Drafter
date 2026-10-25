@@ -51,7 +51,7 @@ class VariableDTO(BaseModel):
     confidence: Optional[float] = 1.0
     reason: Optional[str] = None
     required: bool = True
-    status: str = "approved" # approved, excluded
+    status: str = "pending" # pending, approved, excluded
 
 # Analysis Schemas
 class AnalysisResultDTO(BaseModel):
@@ -128,6 +128,7 @@ class GenerationJobResponse(BaseModel):
     id: str
     template_id: str
     template_version: int
+    output_format: Optional[str] = "docx"
     status: str
     created_at: datetime
     error_code: Optional[str] = None

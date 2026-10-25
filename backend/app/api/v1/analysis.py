@@ -40,7 +40,9 @@ async def analyze_document(id: str, db: Session = Depends(get_db)):
     adapter = get_ai_adapter()
     result = await adapter.analyze(extracted, occurrences, base_variables)
 
+    # Persist in-memory cache and in SQLite database
     _analysis_cache[id] = result
+    doc.analysis_json = result.model_dump(mode="json")
 
     # Update document status
     doc.status = "analyzed"
@@ -55,6 +57,12 @@ async def analyze_document(id: str, db: Session = Depends(get_db)):
 async def get_analysis_result(id: str, db: Session = Depends(get_db)):
     if id in _analysis_cache:
         return _analysis_cache[id]
+
+    doc = db.query(Document).filter(Document.id == id).first()
+    if doc and doc.analysis_json:
+        result = AnalysisResultDTO(**doc.analysis_json)
+        _analysis_cache[id] = result
+        return result
     
-    # If not in cache, run analysis
+    # If not previously analyzed or cached, run analysis
     return await analyze_document(id, db)

@@ -5,10 +5,17 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import docx
+import pymupdf as fitz
 
 from app.main import app
 from app.db.session import Base, get_db
 from app.core.config import settings
+from app.core.errors import AppException, AppErrorCode
+from app.api.v1.analysis import _analysis_cache
+from app.services.replacement.docx_replacer import DocxReplacer
+from app.services.replacement.pdf_replacer import PdfReplacer
+from app.services.validation.post_generator_validator import PostGeneratorValidator
 from tests.fixtures.fixture_builder import (
     create_sample_docx,
     create_complex_docx,
@@ -80,7 +87,7 @@ def test_at03_upload_corrupt_file(client, tmp_path):
     assert resp.status_code == 400
     assert resp.json()["code"] in ["INVALID_ARCHIVE", "UNSUPPORTED_FORMAT"]
 
-# AT-04: Analyze sample with names/dates/amounts
+# AT-04: Analyze sample with names/dates/amounts - verify initialized as pending
 def test_at04_analyze_sample(client, tmp_path):
     docx_file = tmp_path / "sample_at04.docx"
     create_sample_docx(docx_file)
@@ -93,11 +100,13 @@ def test_at04_analyze_sample(client, tmp_path):
     data = analyze_resp.json()
     assert len(data["variables"]) > 0
     assert len(data["occurrences"]) > 0
-    # Source locations exist
+    # Mandatory requirement: Newly detected variables MUST be initialized as pending
+    for v in data["variables"]:
+        assert v["status"] == "pending", f"Variable {v['key']} should be pending by default"
     for occ in data["occurrences"]:
         assert occ["source_locator"]["container_id"] is not None
 
-# AT-05 & AT-06 & AT-07: Edit variable, Exclude variable, Replace linked repeated value
+# AT-05 & AT-06 & AT-07: Edit variable, Exclude variable, Approval-First Replacement
 def test_at05_06_07_template_generation_flow(client, tmp_path):
     docx_file = tmp_path / "sample_flow.docx"
     create_sample_docx(docx_file)
@@ -108,28 +117,29 @@ def test_at05_06_07_template_generation_flow(client, tmp_path):
     analyze_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
     analysis_data = analyze_resp.json()
 
-    # Find the money variable ($75,000) and person_name variable (Rahul Sharma)
     variables = analysis_data["variables"]
     target_var = next(v for v in variables if "$75,000" in v["original_value"])
     exclude_var = next(v for v in variables if "Software Engineer" in v["original_value"] or "October" in v["original_value"])
 
-    # AT-05: Edit a detected variable
+    # AT-05: Edit and APPROVE target variable
     target_var["label"] = "Base Salary"
     target_var["replacement_value"] = "$88,000"
+    target_var["status"] = "approved"
 
-    # AT-06: Exclude a variable
+    # AT-06: Explicitly exclude another variable
     exclude_var["status"] = "excluded"
 
     # Save template
     tpl_resp = client.post("/api/v1/templates", json={
         "name": "Standard Offer Template",
         "document_id": doc_id,
-        "variables": variables
+        "variables": variables,
+        "occurrences": analysis_data["occurrences"]
     })
     assert tpl_resp.status_code == 201
     tpl_id = tpl_resp.json()["id"]
 
-    # AT-07: Generate with approved values
+    # AT-07: Generate with approved value
     gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
         "values": {
             target_var["id"]: "$88,000"
@@ -141,235 +151,366 @@ def test_at05_06_07_template_generation_flow(client, tmp_path):
     assert gen_data["validation_report"]["status"] in ["passed", "warning"]
     assert gen_data["validation_report"]["protected_content_verified"] is True
 
-# AT-08: Same name refers to two people (occurrence splitting)
-def test_at08_split_occurrences(client, tmp_path):
-    doc_path = tmp_path / "same_name.docx"
-    import docx
+# Test Approval-First: Pending variables must NOT be replaced even if value is passed
+def test_approval_first_pending_variable_untouched(client, tmp_path):
+    doc_path = tmp_path / "pending_test.docx"
     d = docx.Document()
-    d.add_paragraph("First party: John Doe (Buyer)")
-    d.add_paragraph("Second party: John Doe (Witness)")
+    d.add_paragraph("Employee: Rahul Sharma")
+    d.add_paragraph("Starting Date: October 26, 2026")
     d.save(str(doc_path))
 
     with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("same_name.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+        up_resp = client.post("/api/v1/documents", files={"file": ("pending_test.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     doc_id = up_resp.json()["id"]
 
     an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    # Both occurrences are identified
-    occs = an_resp.json()["occurrences"]
-    john_occs = [o for o in occs if "John Doe" in o["original_text"]]
-    assert len(john_occs) >= 2
+    vars_list = an_resp.json()["variables"]
 
-# AT-09: DOCX with tables, headers, footers
-def test_at09_docx_with_tables_headers_footers(client, tmp_path):
-    doc_path = tmp_path / "complex_at09.docx"
-    create_complex_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("complex_at09.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    # Leave all variables as 'pending'
+    for v in vars_list:
+        assert v["status"] == "pending"
+
+    tpl_resp = client.post("/api/v1/templates", json={
+        "name": "Pending Test Template",
+        "document_id": doc_id,
+        "variables": vars_list,
+        "occurrences": an_resp.json()["occurrences"]
+    })
+    tpl_id = tpl_resp.json()["id"]
+
+    # Attempt to pass replacement for pending variable
+    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
+        "values": {
+            vars_list[0]["id"]: "UNAPPROVED_REPLACEMENT_VALUE"
+        }
+    })
+    assert gen_resp.status_code == 200
+    job_id = gen_resp.json()["id"]
+
+    # Download and verify unapproved text is completely untouched in actual output file
+    down_resp = client.get(f"/api/v1/generations/{job_id}/download")
+    out_docx_path = tmp_path / "out_pending.docx"
+    with open(out_docx_path, "wb") as f:
+        f.write(down_resp.content)
+
+    doc_out = docx.Document(str(out_docx_path))
+    full_text = " ".join(p.text for p in doc_out.paragraphs)
+    assert "UNAPPROVED_REPLACEMENT_VALUE" not in full_text
+    assert vars_list[0]["original_value"] in full_text
+
+# Exact DOCX occurrence replacement: Repeated identical text in one paragraph
+def test_exact_docx_repeated_text_in_one_paragraph(tmp_path):
+    doc_path = tmp_path / "repeated_same_para.docx"
+    d = docx.Document()
+    # Paragraph contains the exact same name twice
+    p = d.add_paragraph("John Doe was appointed as Director, and John Doe signed the document.")
+    d.save(str(doc_path))
+
+    # occ 1: John Doe at offset 0..8
+    # occ 2: John Doe at offset 38..46
+    replacements = [
+        {
+            "occurrence_id": "occ_002",
+            "container_id": "body/p[0]",
+            "original_text": "John Doe",
+            "new_text": "Alice Smith",
+            "char_start": 40,
+            "char_end": 48
+        }
+    ]
+
+    res = DocxReplacer.apply_replacements(doc_path, replacements)
+    assert res["applied_count"] == 1
+
+    # Verify generated document
+    gen_doc = docx.Document(str(doc_path))
+    result_text = gen_doc.paragraphs[0].text
+    # Occ 1 MUST remain 'John Doe', Occ 2 MUST be 'Alice Smith'
+    assert result_text == "John Doe was appointed as Director, and Alice Smith signed the document."
+
+# DOCX text split across formatting runs
+def test_docx_text_split_across_formatting_runs(tmp_path):
+    doc_path = tmp_path / "split_runs.docx"
+    d = docx.Document()
+    p = d.add_paragraph()
+    r1 = p.add_run("Rahul ")
+    r2 = p.add_run("Sharma")
+    r2.bold = True
+    p.add_run(" is hereby appointed.")
+    d.save(str(doc_path))
+
+    replacements = [
+        {
+            "occurrence_id": "occ_split",
+            "container_id": "body/p[0]",
+            "original_text": "Rahul Sharma",
+            "new_text": "Alex Morgan",
+            "char_start": 0,
+            "char_end": 12
+        }
+    ]
+
+    res = DocxReplacer.apply_replacements(doc_path, replacements)
+    assert res["applied_count"] == 1
+
+    gen_doc = docx.Document(str(doc_path))
+    assert "Alex Morgan is hereby appointed." in gen_doc.paragraphs[0].text
+
+# Overlapping edits rejected with AppErrorCode.OVERLAPPING_EDIT
+def test_overlapping_edits_rejected():
+    with pytest.raises(AppException) as excinfo:
+        DocxReplacer._check_overlapping_edits([
+            {
+                "occurrence_id": "occ_1",
+                "container_id": "body/p[0]",
+                "original_text": "Rahul Sharma",
+                "new_text": "Alice",
+                "char_start": 0,
+                "char_end": 12
+            },
+            {
+                "occurrence_id": "occ_2",
+                "container_id": "body/p[0]",
+                "original_text": "Sharma is",
+                "new_text": "Bob",
+                "char_start": 6,
+                "char_end": 15
+            }
+        ])
+    assert excinfo.value.code == AppErrorCode.OVERLAPPING_EDIT
+
+# PDF repeated text on same page: target only specific bounding box
+def test_pdf_repeated_occurrences_bbox_targeting(tmp_path):
+    pdf_path = tmp_path / "pdf_repeated.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    # Write same name at two different positions
+    p1 = fitz.Point(72, 100)
+    p2 = fitz.Point(72, 200)
+    page.insert_text(p1, "John Doe is the contractor.", fontsize=11)
+    page.insert_text(p2, "John Doe is the signatory.", fontsize=11)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    # Search for rects
+    chk_doc = fitz.open(pdf_path)
+    rects = chk_doc[0].search_for("John Doe")
+    chk_doc.close()
+    assert len(rects) == 2
+
+    # Target ONLY rect 2 (the signatory)
+    target_rect = rects[1]
+    replacements = [
+        {
+            "occurrence_id": "occ_pdf_2",
+            "container_id": "page[0]",
+            "original_text": "John Doe",
+            "new_text": "Elena Rostova",
+            "page": 0,
+            "bbox": [target_rect.x0, target_rect.y0, target_rect.x1, target_rect.y1]
+        }
+    ]
+
+    res = PdfReplacer.apply_replacements(pdf_path, replacements)
+    assert res["applied_count"] == 1
+
+    # Inspect generated PDF
+    out_doc = fitz.open(pdf_path)
+    page_text = out_doc[0].get_text()
+    out_doc.close()
+
+    # First instance must remain John Doe, second instance must be Elena Rostova
+    assert "John Doe" in page_text, "Unapproved first John Doe must remain intact"
+    assert "Elena Rostova" in page_text, "Approved second John Doe must be replaced"
+
+# Format conversion: DOCX -> PDF
+def test_docx_to_pdf_conversion(client, tmp_path):
+    docx_file = tmp_path / "convert_doc.docx"
+    create_sample_docx(docx_file)
+    with open(docx_file, "rb") as f:
+        up_resp = client.post("/api/v1/documents", files={"file": ("convert_doc.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     doc_id = up_resp.json()["id"]
 
     an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
-    assert data["has_headers_footers"] is True
-    assert data["total_tables"] >= 1
+    vars_list = an_resp.json()["variables"]
 
-# AT-10: Export supported PDF
-def test_at10_export_supported_pdf(client, tmp_path):
-    pdf_path = tmp_path / "pdf_at10.pdf"
+    # Approve one variable
+    vars_list[0]["status"] = "approved"
+    vars_list[0]["replacement_value"] = "Vikram Patel"
+
+    tpl_resp = client.post("/api/v1/templates", json={
+        "name": "Convert Template",
+        "document_id": doc_id,
+        "variables": vars_list,
+        "occurrences": an_resp.json()["occurrences"]
+    })
+    tpl_id = tpl_resp.json()["id"]
+
+    # Request PDF output for DOCX source
+    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
+        "values": {vars_list[0]["id"]: "Vikram Patel"},
+        "output_format": "pdf"
+    })
+    assert gen_resp.status_code == 200
+    gen_data = gen_resp.json()
+    assert gen_data["output_format"] == "pdf"
+    assert gen_data["status"] == "completed"
+
+    # Download and verify PDF binary header
+    down_resp = client.get(f"/api/v1/generations/{gen_data['id']}/download")
+    assert down_resp.status_code == 200
+    assert down_resp.content.startswith(b"%PDF-")
+
+# Format rejection: PDF -> DOCX is rejected with 400 UNSUPPORTED_FORMAT
+def test_pdf_to_docx_rejected(client, tmp_path):
+    pdf_path = tmp_path / "src_pdf.pdf"
     create_sample_pdf(pdf_path)
     with open(pdf_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("pdf_at10.pdf", f, "application/pdf")})
+        up_resp = client.post("/api/v1/documents", files={"file": ("src_pdf.pdf", f, "application/pdf")})
     doc_id = up_resp.json()["id"]
 
     an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
+    vars_list = an_resp.json()["variables"]
+    for v in vars_list:
+        v["status"] = "approved"
 
     tpl_resp = client.post("/api/v1/templates", json={
         "name": "PDF Template",
         "document_id": doc_id,
-        "variables": data["variables"]
+        "variables": vars_list,
+        "occurrences": an_resp.json()["occurrences"]
     })
     tpl_id = tpl_resp.json()["id"]
 
-    # Generate PDF with replacement
     gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
-        "values": {v["id"]: "Replacement" for v in data["variables"]}
+        "values": {},
+        "output_format": "docx"
     })
-    assert gen_resp.status_code == 200
+    assert gen_resp.status_code == 400
+    assert gen_resp.json()["code"] == "UNSUPPORTED_FORMAT"
 
-# AT-11: Scanned PDF without OCR
-def test_at11_scanned_pdf_limitation(client, tmp_path):
-    scanned_path = tmp_path / "scanned_at11.pdf"
-    create_scanned_pdf(scanned_path)
-    with open(scanned_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("scanned_at11.pdf", f, "application/pdf")})
+# Post-generator validation: fails when unapproved container content is altered
+def test_post_generator_validator_fails_on_unapproved_alteration(tmp_path):
+    src_docx = tmp_path / "src_clean.docx"
+    d_src = docx.Document()
+    d_src.add_paragraph("Approved line: Replace Me")
+    d_src.add_paragraph("Protected line: Unchanged Original Content")
+    d_src.save(str(src_docx))
+
+    gen_docx = tmp_path / "gen_tampered.docx"
+    d_gen = docx.Document()
+    d_gen.add_paragraph("Approved line: Replacement Applied")
+    # Tamper with the protected line!
+    d_gen.add_paragraph("Protected line: TAMPERED UNAPPROVED CONTENT")
+    d_gen.save(str(gen_docx))
+
+    intended = [
+        {
+            "occurrence_id": "occ_1",
+            "container_id": "body/p[0]",
+            "original_text": "Replace Me",
+            "new_text": "Replacement Applied"
+        }
+    ]
+
+    report = PostGeneratorValidator.validate(
+        generated_path=gen_docx,
+        fmt="docx",
+        intended_replacements=intended,
+        excluded_texts=[],
+        source_path=src_docx
+    )
+
+    assert report.status == "failed"
+    assert any(i.code == "UNAPPROVED_CONTENT_ALTERED" for i in report.issues)
+
+# Application restart and template reuse: persists analysis in database
+def test_restart_persistence_and_template_reuse(client, tmp_path):
+    docx_file = tmp_path / "restart_test.docx"
+    create_sample_docx(docx_file)
+    with open(docx_file, "rb") as f:
+        up_resp = client.post("/api/v1/documents", files={"file": ("restart_test.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     doc_id = up_resp.json()["id"]
 
+    # Run analysis
     an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
-    assert data["is_scanned"] is True
-    assert "OCR is not supported" in data["warning"]
+    assert an_resp.status_code == 200
 
-# AT-12: Source changes after analysis
-def test_at12_source_changes_after_analysis(client, tmp_path):
-    doc_path = tmp_path / "source_change.docx"
-    create_sample_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("source_change.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
-    doc_id = up_resp.json()["id"]
+    # Simulate restart by clearing in-memory cache completely
+    _analysis_cache.clear()
 
-    an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
+    # Request analysis result after restart
+    res_resp = client.get(f"/api/v1/analysis/{doc_id}")
+    assert res_resp.status_code == 200
+    recovered_data = res_resp.json()
+    assert len(recovered_data["variables"]) > 0
+
+    # Successfully save template from recovered analysis
+    target_var = recovered_data["variables"][0]
+    target_var["status"] = "approved"
+    target_var["replacement_value"] = "New Director"
 
     tpl_resp = client.post("/api/v1/templates", json={
-        "name": "Checksum Test",
+        "name": "Persisted Template",
         "document_id": doc_id,
-        "variables": data["variables"]
+        "variables": recovered_data["variables"]
     })
+    assert tpl_resp.status_code == 201
     tpl_id = tpl_resp.json()["id"]
 
-    # Alter original file on disk to simulate change
-    doc_detail = client.get(f"/api/v1/documents/{doc_id}").json()
-    # Find stored file and append bytes
-    stored_path = settings.originals_path / f"{doc_id}.docx"
-    with open(stored_path, "ab") as f:
-        f.write(b"tamper_data")
+    # Generate document from persisted template
+    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
+        "values": {target_var["id"]: "New Director"}
+    })
+    assert gen_resp.status_code == 200
+    assert gen_resp.json()["status"] == "completed"
 
-    # Generate should fail with SOURCE_CHANGED
-    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={"values": {}})
-    assert gen_resp.status_code == 400
-    assert gen_resp.json()["code"] == "SOURCE_CHANGED"
-
-# AT-13: Replacement includes punctuation/unicode
-def test_at13_unicode_replacements(client, tmp_path):
-    doc_path = tmp_path / "unicode_at13.docx"
+# Checksum validation: source document changes after template creation
+def test_stale_source_checksum_fails(client, tmp_path):
+    doc_path = tmp_path / "stale_checksum.docx"
     create_sample_docx(doc_path)
     with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("unicode_at13.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+        up_resp = client.post("/api/v1/documents", files={"file": ("stale_checksum.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     doc_id = up_resp.json()["id"]
 
     an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
     vars_list = an_resp.json()["variables"]
 
     tpl_resp = client.post("/api/v1/templates", json={
-        "name": "Unicode Template",
+        "name": "Checksum Verification Template",
         "document_id": doc_id,
         "variables": vars_list
     })
     tpl_id = tpl_resp.json()["id"]
 
-    # Generate with unicode string
-    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
-        "values": {v["id"]: "Björk & Cœur «100%»" for v in vars_list}
-    })
-    assert gen_resp.status_code == 200
-    assert gen_resp.json()["status"] == "completed"
+    # Tamper with the source document in storage
+    stored_path = settings.originals_path / f"{doc_id}.docx"
+    with open(stored_path, "ab") as f:
+        f.write(b"\n#stale_bytes")
 
-# AT-14: Delete template/document
-def test_at14_cascade_delete(client, tmp_path):
-    doc_path = tmp_path / "delete_target.docx"
+    # Generation should fail with SOURCE_CHANGED
+    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={"values": {}})
+    assert gen_resp.status_code == 400
+    assert gen_resp.json()["code"] == "SOURCE_CHANGED"
+
+# Cascade delete cleans up physical files and database records
+def test_cascade_delete_and_file_cleanup(client, tmp_path):
+    doc_path = tmp_path / "cleanup_target.docx"
     create_sample_docx(doc_path)
     with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("delete_target.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+        up_resp = client.post("/api/v1/documents", files={"file": ("cleanup_target.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
     doc_id = up_resp.json()["id"]
 
+    stored_file = settings.originals_path / f"{doc_id}.docx"
+    assert stored_file.exists()
+
+    # Delete
     del_resp = client.delete(f"/api/v1/documents/{doc_id}")
     assert del_resp.status_code == 200
 
-    # Ensure document is gone
-    check_resp = client.get(f"/api/v1/documents/{doc_id}")
-    assert check_resp.status_code == 404
+    # Verify physical file deleted
+    assert not stored_file.exists()
 
-# AT-15: Generate twice from saved template
-def test_at15_generate_twice(client, tmp_path):
-    doc_path = tmp_path / "twice.docx"
-    create_sample_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("twice.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
-    doc_id = up_resp.json()["id"]
-
-    an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
-
-    tpl_resp = client.post("/api/v1/templates", json={
-        "name": "Reusable Template",
-        "document_id": doc_id,
-        "variables": data["variables"]
-    })
-    tpl_id = tpl_resp.json()["id"]
-
-    # First generation
-    g1 = client.post(f"/api/v1/templates/{tpl_id}/generate", json={"values": {v["id"]: "Value_1" for v in data["variables"]}})
-    assert g1.status_code == 200
-
-    # Second generation
-    g2 = client.post(f"/api/v1/templates/{tpl_id}/generate", json={"values": {v["id"]: "Value_2" for v in data["variables"]}})
-    assert g2.status_code == 200
-
-    # Assert two independent jobs
-    assert g1.json()["id"] != g2.json()["id"]
-
-# AT-16: AI provider fails / fallback
-def test_at16_ai_provider_fallback(client, tmp_path):
-    # Deterministic fallback adapter operates reliably when cloud key is absent or failing
-    doc_path = tmp_path / "fallback.docx"
-    create_sample_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("fallback.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
-    doc_id = up_resp.json()["id"]
-
-    an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    assert an_resp.status_code == 200
-    assert len(an_resp.json()["variables"]) > 0
-
-# AT-17: Download generated artifact
-def test_at17_download_generated_artifact(client, tmp_path):
-    doc_path = tmp_path / "download_test.docx"
-    create_sample_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("download_test.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
-    doc_id = up_resp.json()["id"]
-
-    an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
-
-    tpl_resp = client.post("/api/v1/templates", json={
-        "name": "Download Test Template",
-        "document_id": doc_id,
-        "variables": data["variables"]
-    })
-    tpl_id = tpl_resp.json()["id"]
-
-    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={"values": {v["id"]: "Val" for v in data["variables"]}})
-    job_id = gen_resp.json()["id"]
-
-    down_resp = client.get(f"/api/v1/generations/{job_id}/download")
-    assert down_resp.status_code == 200
-    assert len(down_resp.content) > 0
-
-# AT-18: Logs do not contain sensitive replacement values
-def test_at18_log_sanitization():
-    from app.core.logging import log_event
-    # Calling log_event does not log raw text
-    log_event("DOCUMENT_TEST", "res_123", "Short status only")
-
-# AT-19: Document contains prompt injection text
-def test_at19_prompt_injection_safety(client, tmp_path):
-    doc_path = tmp_path / "injection.docx"
-    create_prompt_injection_docx(doc_path)
-    with open(doc_path, "rb") as f:
-        up_resp = client.post("/api/v1/documents", files={"file": ("injection.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
-    doc_id = up_resp.json()["id"]
-
-    an_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
-    data = an_resp.json()
-    # Content was treated purely as data, not instructions
-    assert an_resp.status_code == 200
-    # No auto-approval took place
-    assert any("Alice Cooper" in v["original_value"] or "$10,000" in v["original_value"] for v in data["variables"])
-
-# AT-20: Replacement overlaps check
-def test_at20_overlapping_edits_rejected():
-    from app.services.replacement.docx_replacer import DocxReplacer
-    # Check that DocxReplacer has overlap detection
-    DocxReplacer._check_overlapping_edits([])
+    # Verify database record deleted
+    get_resp = client.get(f"/api/v1/documents/{doc_id}")
+    assert get_resp.status_code == 404

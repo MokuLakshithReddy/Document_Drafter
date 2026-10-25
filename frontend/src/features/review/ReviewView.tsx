@@ -37,13 +37,19 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
   const [newVarType, setNewVarType] = useState<VariableType>('custom');
   const [newVarOrigValue, setNewVarOrigValue] = useState('');
 
-  // Toggle Approve / Exclude
-  const toggleStatus = (id: string) => {
+  // Set explicit status: approved, excluded, or pending
+  const setStatus = (id: string, status: 'approved' | 'excluded' | 'pending') => {
     setVariables((prev) =>
-      prev.map((v) =>
-        v.id === id ? { ...v, status: v.status === 'approved' ? 'excluded' : 'approved' } : v
-      )
+      prev.map((v) => (v.id === id ? { ...v, status } : v))
     );
+  };
+
+  const approveAll = () => {
+    setVariables((prev) => prev.map((v) => ({ ...v, status: 'approved' })));
+  };
+
+  const excludeAll = () => {
+    setVariables((prev) => prev.map((v) => ({ ...v, status: 'excluded' })));
   };
 
   // Update field value
@@ -234,32 +240,64 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
               <SlidersHorizontal size={16} color="#a855f7" />
               Variable Candidates ({variables.length})
             </h4>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-              {variables.filter((v) => v.status === 'approved').length} approved
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={approveAll}
+                className="btn btn-secondary"
+                style={{ padding: '3px 8px', fontSize: 11, color: '#34d399' }}
+              >
+                Approve All
+              </button>
+              <button
+                onClick={excludeAll}
+                className="btn btn-secondary"
+                style={{ padding: '3px 8px', fontSize: 11, color: '#f87171' }}
+              >
+                Exclude All
+              </button>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginLeft: 4 }}>
+                {variables.filter((v) => v.status === 'approved').length} approved
+              </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 580, overflowY: 'auto', paddingRight: 4 }}>
             {variables.map((v) => {
               const isApproved = v.status === 'approved';
+              const isPending = v.status === 'pending';
+              const isExcluded = v.status === 'excluded';
+
               return (
                 <div
                   key={v.id}
                   className="glass-panel"
                   style={{
                     padding: 14,
-                    border: isApproved ? '1px solid rgba(99, 102, 241, 0.35)' : '1px solid rgba(255, 255, 255, 0.05)',
-                    background: isApproved ? 'rgba(30, 41, 59, 0.65)' : 'rgba(15, 23, 42, 0.4)',
-                    opacity: isApproved ? 1 : 0.6,
+                    border: isApproved
+                      ? '1px solid rgba(16, 185, 129, 0.4)'
+                      : isPending
+                      ? '1px solid rgba(245, 158, 11, 0.4)'
+                      : '1px solid rgba(255, 255, 255, 0.05)',
+                    background: isApproved
+                      ? 'rgba(6, 78, 59, 0.25)'
+                      : isPending
+                      ? 'rgba(120, 53, 15, 0.2)'
+                      : 'rgba(15, 23, 42, 0.4)',
+                    opacity: isExcluded ? 0.6 : 1,
                     transition: 'all 0.2s',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span className={`badge badge-${v.type}`}>{v.type}</span>
-                      <strong style={{ fontSize: 14, color: isApproved ? '#fff' : 'var(--text-muted)' }}>
+                      <strong style={{ fontSize: 14, color: isApproved ? '#fff' : isPending ? '#fcd34d' : 'var(--text-muted)' }}>
                         {v.label}
                       </strong>
+                      {isPending && (
+                        <span style={{ fontSize: 10, background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>
+                          PENDING
+                        </span>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -274,26 +312,64 @@ export const ReviewView: React.FC<ReviewViewProps> = ({
                         {v.occurrence_ids.length} occ
                       </button>
 
-                      {/* Approve / Exclude Button */}
-                      <button
-                        onClick={() => toggleStatus(v.id)}
-                        style={{
-                          background: isApproved ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-                          color: isApproved ? '#34d399' : '#f87171',
-                          border: `1px solid ${isApproved ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
-                          borderRadius: 6,
-                          padding: '4px 8px',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}
-                      >
-                        {isApproved ? <Check size={12} /> : <X size={12} />}
-                        {isApproved ? 'Approved' : 'Excluded'}
-                      </button>
+                      {/* Action buttons */}
+                      {isPending ? (
+                        <>
+                          <button
+                            onClick={() => setStatus(v.id, 'approved')}
+                            style={{
+                              background: 'rgba(16, 185, 129, 0.25)',
+                              color: '#34d399',
+                              border: '1px solid rgba(16, 185, 129, 0.5)',
+                              borderRadius: 6,
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <Check size={12} /> Approve
+                          </button>
+                          <button
+                            onClick={() => setStatus(v.id, 'excluded')}
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.15)',
+                              color: '#f87171',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: 6,
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Exclude
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setStatus(v.id, isApproved ? 'excluded' : 'approved')}
+                          style={{
+                            background: isApproved ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                            color: isApproved ? '#34d399' : '#f87171',
+                            border: `1px solid ${isApproved ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                            borderRadius: 6,
+                            padding: '4px 8px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                        >
+                          {isApproved ? <Check size={12} /> : <X size={12} />}
+                          {isApproved ? 'Approved' : 'Excluded'}
+                        </button>
+                      )}
                     </div>
                   </div>
 
