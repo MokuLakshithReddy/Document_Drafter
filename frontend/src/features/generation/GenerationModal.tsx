@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, X, AlertCircle, Loader2, ArrowRight, Info } from 'lucide-react';
+import { Sparkles, X, AlertCircle, Loader2, ArrowRight, Info, RotateCcw, Bookmark } from 'lucide-react';
 import type { TemplateDetail, GenerationJob } from '../../types';
 import { api } from '../../api/client';
 
@@ -10,18 +10,22 @@ interface GenerationModalProps {
   onGenerationComplete: (job: GenerationJob) => void;
 }
 
-export const GenerationModal: React.FC<GenerationModalProps> = ({
-  isOpen,
+interface GenerationFormProps {
+  template: TemplateDetail;
+  onClose: () => void;
+  onGenerationComplete: (job: GenerationJob) => void;
+}
+
+const GenerationForm: React.FC<GenerationFormProps> = ({
   template,
   onClose,
   onGenerationComplete,
 }) => {
-  if (!isOpen || !template) return null;
-
+  // Start each generation with blank session values by default
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const v of template.variables) {
-      initial[v.id] = v.replacement_value || '';
+      initial[v.id] = '';
     }
     return initial;
   });
@@ -33,6 +37,23 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
 
   const variables = template.variables;
+  const hasAnyDefaults = variables.some((v) => Boolean(v.replacement_value && v.replacement_value.trim()));
+
+  const loadSavedDefaults = () => {
+    const defaults: Record<string, string> = {};
+    for (const v of variables) {
+      defaults[v.id] = v.replacement_value || '';
+    }
+    setValues(defaults);
+  };
+
+  const clearAllValues = () => {
+    const cleared: Record<string, string> = {};
+    for (const v of variables) {
+      cleared[v.id] = '';
+    }
+    setValues(cleared);
+  };
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,7 +91,7 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
           </button>
         </div>
 
-        {/* Rule explanation notice */}
+        {/* Rule explanation notice & quick actions */}
         <div style={{
           background: 'rgba(99, 102, 241, 0.1)',
           border: '1px solid rgba(99, 102, 241, 0.25)',
@@ -81,10 +102,57 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
           marginBottom: 16,
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
           gap: 8,
         }}>
-          <Info size={16} color="#818cf8" />
-          <span>Enter replacement values below. Any field left blank will keep its original text in the document.</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Info size={16} color="#818cf8" style={{ flexShrink: 0 }} />
+            <span>Enter replacement values below. Fields left blank leave original text 100% unchanged.</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            {hasAnyDefaults && (
+              <button
+                type="button"
+                onClick={loadSavedDefaults}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: '#fff',
+                  borderRadius: 5,
+                  padding: '3px 8px',
+                  fontSize: 11,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  cursor: 'pointer',
+                }}
+                title="Populate fields with saved template default values"
+              >
+                <Bookmark size={12} />
+                Load Defaults
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={clearAllValues}
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: 'var(--text-muted)',
+                borderRadius: 5,
+                padding: '3px 8px',
+                fontSize: 11,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer',
+              }}
+              title="Clear all inputs to leave all original document content unchanged"
+            >
+              <RotateCcw size={12} />
+              Clear
+            </button>
+          </div>
         </div>
 
         {errorMessage && (
@@ -165,9 +233,13 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
           }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600 }}>Target Output Format:</div>
-              {template.source_format === 'pdf' && (
+              {template.source_format === 'pdf' ? (
                 <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                   (PDF-to-Word conversion is not supported; outputs as PDF)
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  (Word format preserves 100% native layout, fonts, and print styles)
                 </div>
               )}
             </div>
@@ -231,5 +303,22 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
         </form>
       </div>
     </div>
+  );
+};
+
+export const GenerationModal: React.FC<GenerationModalProps> = ({
+  isOpen,
+  template,
+  onClose,
+  onGenerationComplete,
+}) => {
+  if (!isOpen || !template) return null;
+
+  return (
+    <GenerationForm
+      template={template}
+      onClose={onClose}
+      onGenerationComplete={onGenerationComplete}
+    />
   );
 };

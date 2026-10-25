@@ -12,18 +12,22 @@ class PostGeneratorValidator:
         generated_path: Path,
         fmt: str,
         intended_replacements: List[Dict[str, Any]],
-        excluded_texts: List[str],
-        source_path: Optional[Path] = None
+        unmodified_original_texts: Optional[List[str]] = None,
+        source_path: Optional[Path] = None,
+        excluded_texts: Optional[List[str]] = None # Backwards compatibility alias
     ) -> ValidationReport:
         """
         Re-opens the generated document and source document, and performs strict integrity validation:
-        1. Every intended replacement is verified at the exact container locator.
-        2. Protected/unapproved containers and texts remain 100% unchanged.
-        3. Structure and integrity are verified; unexplained alterations trigger failure.
+        1. Every intended replacement is verified to have occurred at the exact container locator.
+        2. Unmodified containers and original text without replacements remain 100% unchanged.
+        3. Structure and integrity are verified; missing containers or unexplained alterations fail closed.
         """
         issues: List[ValidationIssue] = []
         verified_replacements_count = 0
         protected_content_verified = True
+
+        # Unify unmodified original texts
+        unmodified_texts = (unmodified_original_texts or []) + (excluded_texts or [])
 
         try:
             # 1. Extract generated document
@@ -34,23 +38,34 @@ class PostGeneratorValidator:
 
             gen_unit_map = {u.container_id: u for u in gen_extracted.units}
 
-            # 2. Extract source document for structure comparison if available
+            # 2. Extract source document for baseline comparison
             source_unit_map = {}
             if source_path and source_path.exists():
                 try:
                     src_fmt = source_path.suffix.lstrip(".").lower()
-                    if src_fmt == fmt:
-                        if src_fmt == "docx":
-                            src_extracted = DocxExtractor.extract(source_path, "validation_src")
-                        else:
-                            src_extracted = PdfExtractor.extract(source_path, "validation_src")
-                        source_unit_map = {u.container_id: u for u in src_extracted.units}
+                    if src_fmt == "docx":
+                        src_extracted = DocxExtractor.extract(source_path, "validation_src")
+                    else:
+                        src_extracted = PdfExtractor.extract(source_path, "validation_src")
+                    source_unit_map = {u.container_id: u for u in src_extracted.units}
+
+                    # Flag layout approximation if converting across formats
+                    if src_fmt != fmt:
+                        issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                code="LAYOUT_APPROXIMATION",
+                                message="DOCX-to-PDF conversion was performed using the built-in layout engine. Print geometry, page breaks, and complex font metrics are approximated.",
+                                location="document"
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Could not extract source document for baseline comparison: {e}")
 
             # 3. Verify each intended replacement at the exact target location
             for rep in intended_replacements:
                 new_val = rep.get("new_text", "")
+                orig_val = rep.get("original_text", "")
                 cid = rep.get("container_id", "")
                 occ_id = rep.get("occurrence_id", "")
                 page_idx = rep.get("page")
@@ -63,7 +78,23 @@ class PostGeneratorValidator:
                 if cid and cid in gen_unit_map:
                     container_text = gen_unit_map[cid].full_text
                     if new_val in container_text:
-                        matched_at_location = True
+                        # Prove replacement: if original text differed, verify that original count decreased in this container
+                        if orig_val and orig_val != new_val and cid in source_unit_map:
+                            src_orig_count = source_unit_map[cid].full_text.count(orig_val)
+                            gen_orig_count = container_text.count(orig_val)
+                            if gen_orig_count < src_orig_count or orig_val not in container_text:
+                                matched_at_location = True
+                            else:
+                                issues.append(
+                                    ValidationIssue(
+                                        severity="error",
+                                        code="UNREPLACED_ORIGINAL_REMAINS",
+                                        message=f"Original text '{orig_val[:30]}' was not consumed at target container '{cid}'.",
+                                        location=cid
+                                    )
+                                )
+                        else:
+                            matched_at_location = True
                 elif fmt == "pdf":
                     if page_idx is not None:
                         page_units = [u for u in gen_extracted.units if u.page == page_idx]
@@ -78,26 +109,39 @@ class PostGeneratorValidator:
                 if matched_at_location:
                     verified_replacements_count += 1
                 else:
-                    # Strict failure: replacement missing at intended location!
+                    # Strict failure: replacement missing or unproven at intended location!
                     issues.append(
                         ValidationIssue(
                             severity="error",
                             code="REPLACEMENT_LOCATION_MISMATCH",
-                            message=f"Replacement value '{new_val[:30]}' was not found at target location '{cid or f'page[{page_idx}]'}'.",
+                            message=f"Replacement value '{new_val[:30]}' was not proven at target location '{cid or f'page[{page_idx}]'}'.",
                             location=cid or f"page[{page_idx}]"
                         )
                     )
 
-            # 4. Compare unapproved content against source document
+            # 4. Strict source comparison: fail closed on missing or altered unmodified content
             targeted_cids = {
                 rep.get("container_id") for rep in intended_replacements if rep.get("container_id")
             }
 
-            if source_unit_map:
+            if source_unit_map and (source_path.suffix.lstrip(".").lower() == fmt):
                 for s_cid, s_unit in source_unit_map.items():
-                    if s_cid not in targeted_cids and s_cid in gen_unit_map:
+                    # Check if source container was completely dropped
+                    if s_cid not in gen_unit_map:
+                        protected_content_verified = False
+                        issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                code="SOURCE_CONTAINER_MISSING",
+                                message=f"Source container '{s_cid}' was omitted from generated document.",
+                                location=s_cid
+                            )
+                        )
+                        continue
+
+                    # If container was not targeted for replacement, verify 100% unchanged
+                    if s_cid not in targeted_cids:
                         g_unit = gen_unit_map[s_cid]
-                        # Normalize whitespace for robust comparison
                         s_norm = " ".join(s_unit.full_text.split())
                         g_norm = " ".join(g_unit.full_text.split())
                         if s_norm != g_norm:
@@ -105,27 +149,27 @@ class PostGeneratorValidator:
                             issues.append(
                                 ValidationIssue(
                                     severity="error",
-                                    code="UNAPPROVED_CONTENT_ALTERED",
-                                    message=f"Unapproved container '{s_cid}' was altered without explicit user approval.",
+                                    code="UNMODIFIED_CONTENT_ALTERED",
+                                    message=f"Unmodified container '{s_cid}' was altered without an intended replacement.",
                                     location=s_cid
                                 )
                             )
 
-            # 5. Check that unapproved / pending / excluded texts remain present
-            for exc_text in excluded_texts:
-                if exc_text and exc_text.strip():
-                    if exc_text not in gen_extracted.raw_text:
+            # 5. Check that original texts without replacements remain present in the document
+            for unmod_text in unmodified_texts:
+                if unmod_text and unmod_text.strip():
+                    if unmod_text not in gen_extracted.raw_text:
                         protected_content_verified = False
                         issues.append(
                             ValidationIssue(
                                 severity="error",
-                                code="PROTECTED_CONTENT_ALTERED",
-                                message=f"Protected or unapproved text '{exc_text[:30]}' was altered or removed."
+                                code="UNMODIFIED_TEXT_MISSING",
+                                message=f"Original text '{unmod_text[:30]}' was altered or removed despite no replacement being specified."
                             )
                         )
 
         except Exception as e:
-            logger.error(f"Post-generation validation failed to parse output: {e}")
+            logger.error(f"Post-generation validation failed: {e}")
             return ValidationReport(
                 status="failed",
                 intended_replacements_count=len(intended_replacements),

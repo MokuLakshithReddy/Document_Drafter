@@ -66,7 +66,7 @@ def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
             type=v.type,
             required=v.required,
             status=v.status or "active",
-            default_value=v.replacement_value,
+            default_value=v.replacement_value.strip() if (v.replacement_value and isinstance(v.replacement_value, str) and v.replacement_value.strip()) else None,
             confidence=str(v.confidence) if v.confidence else "1.0",
             description=v.reason
         )
@@ -80,12 +80,15 @@ def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
                 matched_occ = next((o for o in req.occurrences if o.id == occ_id), None)
                 if matched_occ:
                     loc = matched_occ.source_locator.model_dump()
-            elif doc.id in _analysis_cache:
+            if loc.get("container_id") == "auto" and doc.id in _analysis_cache:
                 matched_occ = next((o for o in _analysis_cache[doc.id].occurrences if o.id == occ_id), None)
                 if matched_occ:
                     loc = matched_occ.source_locator.model_dump()
-            elif doc.analysis_json and "occurrences" in doc.analysis_json:
+            if loc.get("container_id") == "auto" and doc.analysis_json and "occurrences" in doc.analysis_json:
                 matched_raw = next((o for o in doc.analysis_json["occurrences"] if o.get("id") == occ_id), None)
+                if not matched_raw:
+                    # Fallback match by original_text
+                    matched_raw = next((o for o in doc.analysis_json["occurrences"] if o.get("original_text") == v.original_value), None)
                 if matched_raw:
                     loc = matched_raw.get("source_locator", loc)
 
@@ -152,13 +155,19 @@ def get_template(id: str, db: Session = Depends(get_db)):
             )
         )
         for o in v.occurrences:
+            raw_loc = o.source_locator if isinstance(o.source_locator, dict) else {}
             occ_dtos.append(
                 OccurrenceDTO(
                     id=o.id,
                     variable_id=v.id,
                     source_locator=SourceLocator(
-                        kind=o.source_locator.get("kind", "paragraph"),
-                        container_id=o.source_locator.get("container_id", "body/p[0]")
+                        kind=raw_loc.get("kind", "paragraph"),
+                        container_id=raw_loc.get("container_id", "body/p[0]"),
+                        run_index=raw_loc.get("run_index"),
+                        char_start=raw_loc.get("char_start"),
+                        char_end=raw_loc.get("char_end"),
+                        bbox=raw_loc.get("bbox"),
+                        page=raw_loc.get("page")
                     ),
                     original_text=o.original_text,
                     status=o.status
@@ -279,8 +288,10 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             active_replacements.append({
                 "occurrence_id": occ.id,
                 "container_id": loc.get("container_id", "body/p[0]"),
+                "kind": loc.get("kind", "paragraph"),
                 "original_text": occ.original_text,
                 "new_text": new_val,
+                "run_index": loc.get("run_index"),
                 "char_start": loc.get("char_start"),
                 "char_end": loc.get("char_end"),
                 "page": loc.get("page"),
@@ -344,7 +355,7 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
             generated_path=final_gen_path,
             fmt=target_format,
             intended_replacements=active_replacements,
-            excluded_texts=unmodified_original_texts,
+            unmodified_original_texts=unmodified_original_texts,
             source_path=original_file_path if target_format == doc.format else None
         )
 

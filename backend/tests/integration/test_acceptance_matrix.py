@@ -436,7 +436,7 @@ def test_validation_detects_unexpected_content_changes(tmp_path):
     )
 
     assert report.status == "failed"
-    assert any(i.code in ["UNAPPROVED_CONTENT_ALTERED", "PROTECTED_CONTENT_ALTERED"] for i in report.issues)
+    assert any(i.code in ["UNMODIFIED_CONTENT_ALTERED", "UNAPPROVED_CONTENT_ALTERED", "PROTECTED_CONTENT_ALTERED", "UNMODIFIED_TEXT_MISSING"] for i in report.issues)
 
 # 15. Validation detects missing intended replacement
 def test_validation_detects_missing_replacement(tmp_path):
@@ -590,3 +590,62 @@ def test_cascade_delete_and_file_cleanup(client, tmp_path):
 
     get_resp = client.get(f"/api/v1/documents/{doc_id}")
     assert get_resp.status_code == 404
+
+# 21. Complete save -> reload -> generate cycle preserves exact occurrence locators
+def test_save_reload_generate_preserves_full_locators(client, tmp_path):
+    doc_path = tmp_path / "cycle_test.docx"
+    d = docx.Document()
+    d.add_paragraph("Agreement between Acme Corporation and Beta Industries LLC.")
+    d.add_paragraph("Effective Date: January 15, 2026. Payment: $50,000 upon execution.")
+    d.save(str(doc_path))
+
+    with open(doc_path, "rb") as f:
+        up_resp = client.post("/api/v1/documents", files={"file": ("cycle_test.docx", f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    doc_id = up_resp.json()["id"]
+
+    # 1. Analyze
+    ana_resp = client.post(f"/api/v1/documents/{doc_id}/analyze")
+    analysis = ana_resp.json()
+    assert len(analysis["variables"]) > 0
+    assert len(analysis["occurrences"]) > 0
+
+    first_occ = analysis["occurrences"][0]
+    orig_char_start = first_occ["source_locator"].get("char_start")
+    orig_char_end = first_occ["source_locator"].get("char_end")
+
+    # 2. Save template
+    save_resp = client.post("/api/v1/templates", json={
+        "name": "Locator Integrity Template",
+        "document_id": doc_id,
+        "variables": analysis["variables"],
+        "occurrences": analysis["occurrences"]
+    })
+    assert save_resp.status_code == 201
+    tpl_id = save_resp.json()["id"]
+
+    # 3. Reload template
+    reload_resp = client.get(f"/api/v1/templates/{tpl_id}")
+    assert reload_resp.status_code == 200
+    reloaded_tpl = reload_resp.json()
+    assert len(reloaded_tpl["occurrences"]) > 0
+
+    reloaded_occ = reloaded_tpl["occurrences"][0]
+    loc = reloaded_occ["source_locator"]
+
+    # Complete locator must be preserved and restored!
+    assert "kind" in loc
+    assert "container_id" in loc
+    assert loc.get("char_start") == orig_char_start
+    assert loc.get("char_end") == orig_char_end
+
+    # 4. Generate from reloaded template
+    target_var = reloaded_tpl["variables"][0]
+    gen_resp = client.post(f"/api/v1/templates/{tpl_id}/generate", json={
+        "values": {target_var["id"]: "Replacement_Value_Success"}
+    })
+    assert gen_resp.status_code == 200
+    job = gen_resp.json()
+    assert job["status"] == "completed"
+    assert job["validation_report"]["status"] == "passed"
+    assert job["validation_report"]["verified_replacements_count"] >= 1
+

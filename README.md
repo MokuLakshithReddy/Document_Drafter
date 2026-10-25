@@ -1,17 +1,17 @@
 # AI Document Reuse Platform
 
 ## Overview
-A private, local-first, AI-assisted document reuse workspace. A user uploads an existing DOCX or PDF, the system analyzes the document, detects likely changeable fields (names, dates, amounts, roles, addresses, IDs), lets the user approve/reject/edit fields and inspect occurrences, then generates a new document with only approved changes while preserving all unchanged content and formatting.
+A private, local-first document reuse workspace. A user uploads an existing DOCX or text-based PDF, the system extracts structure and detects likely changeable fields (names, dates, amounts, roles, addresses, IDs), lets the user enter replacement values, and generates a new document where only fields with non-empty replacement values are modified while leaving all other document content completely unchanged.
 
 ## Core Principle
-**Change only what the user approves; preserve all other content and formatting wherever the selected document format and supported feature set allow.**
+**If the user enters a non-empty new value, replace the corresponding original value. If the user leaves the field blank or omits it, leave the original document content unchanged.**
 
 ## Architecture & Technology Stack
-- **Frontend**: React 18 + TypeScript + Vite + Tailwind/Modern Clean CSS + Lucide Icons
+- **Frontend**: React 18 + TypeScript + Vite + Tailwind/Modern CSS + Lucide Icons
 - **Backend API**: Python FastAPI + Pydantic v2 + Uvicorn (bound to `127.0.0.1`)
-- **Database**: SQLite with SQLAlchemy ORM
+- **Database**: SQLite with SQLAlchemy ORM (auto-migrating schema on startup)
 - **DOCX Processing**: `python-docx` with run-level multi-run phrase matching and structural integrity verification
-- **PDF Processing**: `PyMuPDF` (`fitz`) for text extraction, page and bounding-box mapping, and ReportLab / PyMuPDF PDF export
+- **PDF Processing**: `PyMuPDF` (`fitz`) for text extraction, exact bounding-box targeting, and span-level typography/color preservation
 - **AI Adapter**: Provider-independent structured output interface supporting Gemini / OpenAI / Ollama, with fully deterministic heuristic fallback when no API key is provided
 - **Storage**: Local-first private directory structure:
   - `storage/originals/`
@@ -101,44 +101,54 @@ npm.cmd run build
 ---
 
 ## Features & Workflows
+
 1. **Upload & Format Detection**:
-   - Validates file signatures, file sizes, page limits, and ZIP package safety against ZIP bombs.
-   - Detects format: DOCX, text-based PDF, or scanned PDF without text (flags scanned PDF clearly).
+   - Validates file signatures, file sizes (up to 25MB), page limits (up to 100 pages), and ZIP bomb safety.
+   - Robust binary signature detection for DOCX and text-based PDF. Flags scanned image-only PDFs clearly.
+
 2. **Text & Structural Extraction**:
    - DOCX: paragraphs, runs, tables, headers, footers with granular source locators.
-   - PDF: text extraction with page numbers and coordinate bounding boxes.
-3. **Variable Detection & AI Adapter**:
+   - PDF: text extraction with page numbers, exact coordinate bounding boxes, and span font metrics.
+
+3. **Variable Detection & Heuristic/AI Adapter**:
    - Deterministic candidate extraction (regex & NER patterns for dates, currency, emails, phone numbers, IDs, person names, organizations).
-   - AI enhancement interface with strict JSON schema validation.
-   - Fallback mode works 100% offline without cloud AI.
-4. **Interactive Review**:
-   - View document preview with highlighted occurrences.
-   - Edit label, type, and replacement values.
-   - Approve, exclude, split occurrences, or add custom fields.
-   - Overlap and conflict prevention.
-5. **Deterministic DOCX & PDF Generation**:
-   - Edits are applied to working copies only; original files are immutable.
-   - Multi-run phrase replacement preserves font styles and bold/italic runs.
-   - Table, header, and footer replacements.
-6. **Post-Generation Validation**:
-   - Re-extracts generated file content to ensure approved changes took effect and protected content was untouched.
+   - AI enhancement interface with strict JSON schema validation. Works 100% offline without cloud AI.
+
+4. **Simplified Replacement Review**:
+   - Review each detected variable's label, original value, and optional new value.
+   - **Simple rule**: non-empty input replaces original value; blank/omitted leaves original document content unchanged.
+   - Exact occurrence locators (container ID, character start/end, run index, page, bounding box) are preserved across template save, reload, and generation cycles.
+
+5. **Exact Occurrence Replacement**:
+   - DOCX: Multi-run phrase replacement preserves formatting runs, bold/italic attributes, and font styles across split XML nodes.
+   - PDF: Strict coordinate targeting. Redaction only targets the verified bounding box on the specified page, extracting font size, family, and color from the original text span. Missing or ambiguous locations fail closed rather than guessing.
+
+6. **Strict Post-Generation Validation**:
+   - Re-extracts generated document and baseline source document.
+   - Verifies each replacement occurred at the intended container and consumed the original text.
+   - Fails closed on missing source containers, unintended container alterations, or missing unmodified original text.
    - Generates an automated validation report before download.
-7. **Template Library & History**:
-   - Save reviewed document as a reusable template.
-   - Generate multiple outputs with independent variable values.
-   - Configurable file retention and cascade deletion.
+
+7. **Template Library & Multi-Generation**:
+   - Save documents as reusable templates with full occurrence locators.
+   - Start each generation with clean blank inputs, with optional button to load saved defaults.
+   - Cascade delete cleanly cleans up database records and disk storage.
 
 ---
 
-## Known Limitations
-- **PDF In-place Editing**: In-place replacement of complex arbitrary PDFs with preserved font vectors is unsupported by design in MVP; a supported PDF regeneration path and DOCX-to-PDF/styled PDF export is provided.
-- **Scanned PDFs**: Scanned image PDFs without text layer require OCR which is flagged as an explicit limitation in this MVP.
-- **Complex Word Features**: Macros, active content controls, embedded OLE objects, and complex field codes are rejected or ignored to preserve security and stability.
+## Conversion & Layout Fidelity
+
+- **DOCX-to-PDF Conversion**:
+  - If headless LibreOffice (`soffice`) is installed on the host system, the platform utilizes it for native 1:1 print layout fidelity.
+  - In environments without LibreOffice, the platform falls back to a structured ReportLab flowable engine that preserves document headers, footers, paragraphs, styling runs, and tables. Validation reports flag a `LAYOUT_APPROXIMATION` notice to indicate that custom Word vector geometries and exact print line-wraps are approximated.
+  - To guarantee 100% native layout fidelity, users are advised to output in Word (.docx) format or install LibreOffice.
+- **PDF In-place Editing**: In-place replacement uses exact bounding-box redaction and span-level font/color preservation. Ambiguous or non-intersecting text occurrences fail closed.
+- **Scanned PDFs**: Scanned image PDFs without OCR text layer are flagged upon upload as requiring OCR before processing.
 
 ---
 
 ## Security & Privacy
-- Localhost binding (`127.0.0.1`) only.
+- Localhost binding (`127.0.0.1`) only by default.
 - Private storage outside public web directory.
-- No raw sensitive document text logged in server logs.
+- No sensitive document text logged in server audit trails.
 - Safe path resolution defending against directory traversal.
