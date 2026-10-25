@@ -2,14 +2,16 @@ from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
 class Settings(BaseSettings):
     HOST: str = "127.0.0.1"
     PORT: int = 8000
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
-    # Base Storage Path (outside frontend public root)
-    STORAGE_DIR: str = "./storage"
+    # Base Storage Path (outside frontend public root, anchored to backend folder)
+    STORAGE_DIR: str = str(BACKEND_DIR / "storage")
     MAX_UPLOAD_SIZE_MB: int = 25
     MAX_PAGE_LIMIT: int = 100
     FILE_RETENTION_DAYS: int = 30
@@ -21,10 +23,10 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
 
     SECRET_KEY: str = "local-secret-key-antigravity"
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://ai-document-reuse.mokulakshithreddy.workers.dev"
 
-    # Database
-    DATABASE_URL: str = "sqlite:///./document_reuse.db"
+    # Database anchored to backend directory
+    DATABASE_URL: str = f"sqlite:///{BACKEND_DIR / 'document_reuse.db'}"
 
     model_config = SettingsConfigDict(env_file=".env", extra="allow")
 

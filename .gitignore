@@ -36,7 +36,7 @@ dist-ssr/
 
 # Environment & Local Storage
 .env
-storage/
+backend/storage/
 *.sqlite
 *.db
 *.log

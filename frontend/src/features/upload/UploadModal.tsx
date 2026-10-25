@@ -46,7 +46,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({
       }, 700);
     } catch (err: any) {
       setUploadState('error');
-      setErrorMessage(err.message || 'An error occurred during upload or analysis.');
+      let msg = err.message || 'An error occurred during upload or analysis.';
+      if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
+        msg = 'Could not connect to backend server at http://127.0.0.1:8000. Please ensure the backend server is running.';
+      }
+      setErrorMessage(msg);
     }
   };
 

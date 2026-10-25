@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.errors import AppException
 from app.core.logging import logger
-from app.db.session import engine, Base
+from app.db.session import engine, Base, run_migrations
 import app.models # register all models
 
 from app.api.v1.documents import router as documents_router
@@ -19,6 +19,7 @@ from app.api.v1.settings import router as settings_router
 async def lifespan(app: FastAPI):
     logger.info("Initializing database schema...")
     Base.metadata.create_all(bind=engine)
+    run_migrations()
     logger.info(f"Storage directory: {settings.base_storage_path}")
     logger.info("AI Document Reuse Platform initialized successfully.")
     yield
@@ -30,10 +31,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration strictly restricted to local frontend
+# CORS configuration allowing local dev and Cloudflare deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins_list,
+    allow_origins=settings.allowed_origins_list + ["https://ai-document-reuse.mokulakshithreddy.workers.dev"],
+    allow_origin_regex=r"^https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
