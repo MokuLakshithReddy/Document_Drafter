@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Shield, HardDrive, Key, Save, CheckCircle2, Lock } from 'lucide-react';
+import { Settings, Shield, HardDrive, Key, Save, CheckCircle2, Lock, UserCheck } from 'lucide-react';
 import type { AppSettings } from '../../types';
-import { api } from '../../api/client';
+import { api, getApiKey, setApiKey, getSessionId } from '../../api/client';
 
 interface SettingsViewProps {
   initialSettings: AppSettings | null;
@@ -14,6 +14,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const [provider, setProvider] = useState(initialSettings?.ai_provider || 'deterministic');
   const [geminiKey, setGeminiKey] = useState('');
+  const [appApiKey, setAppApiKey] = useState(getApiKey());
   const [retentionDays, setRetentionDays] = useState(initialSettings?.file_retention_days || 30);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -31,6 +32,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setSavedSuccess(false);
 
     try {
+      setApiKey(appApiKey.trim());
       const updated = await api.updateSettings({
         ai_provider: provider,
         gemini_api_key: geminiKey || undefined,
@@ -193,6 +195,47 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               className="input-field"
               style={{ opacity: 0.7, fontFamily: 'monospace', fontSize: 12 }}
             />
+          </div>
+        </div>
+
+        {/* Authentication & Session Card */}
+        <div className="glass-panel" style={{ padding: 24 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <UserCheck size={18} color="#38bdf8" />
+            API Authentication & Session Isolation
+          </h3>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+            When deployed to a remote environment with authentication enabled, enter your authorized API key below. Requests are automatically tagged with your client session ID to isolate uploaded documents and templates.
+          </p>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <Key size={14} />
+              Client API Key (Optional for Local, Required if API_KEY configured)
+            </label>
+            <input
+              type="password"
+              value={appApiKey}
+              onChange={(e) => setAppApiKey(e.target.value)}
+              placeholder="Enter API Key (sent via X-API-Key)"
+              className="input-field"
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 4 }}>
+              Current Client Session ID
+            </label>
+            <input
+              type="text"
+              disabled
+              value={getSessionId()}
+              className="input-field"
+              style={{ opacity: 0.7, fontFamily: 'monospace', fontSize: 12 }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4, display: 'block' }}>
+              Isolated to your browser instance. Other sessions cannot access or modify your uploaded files.
+            </span>
           </div>
         </div>
 

@@ -147,8 +147,31 @@ npm.cmd run build
 
 ---
 
-## Security & Privacy
+## Security Architecture & Threat Model
+
+The platform is designed with security-first controls separating local-first desktop usage from remote cloud deployment.
+
+### 1. Threat Model & Deployment Modes
+- **Local-First Development Mode (`ENVIRONMENT=development`)**:
+  - Bound exclusively to `127.0.0.1` / `localhost`.
+  - Stored files reside in private directories outside any web server document root.
+  - Development warnings inform operators if non-production secrets or unrestricted origins are in use.
+- **Remote Cloud / Production Mode (`ENVIRONMENT=production`)**:
+  - Startup strictly validates that `SECRET_KEY` is not the default placeholder and contains at least 32 cryptographically random characters.
+  - When `REQUIRE_AUTH=true`, all API endpoints require valid client authentication via `X-API-Key` or `Authorization: Bearer <key>`.
+  - Document uploads, analysis records, templates, and generated outputs are strictly scoped to the requesting `owner_id` (via `X-Session-ID` / client identity). Cross-tenant access attempts return `403 Forbidden`.
+
+### 2. Strict CORS Allowlist
+- Arbitrary origin regex patterns (e.g. `allow_origin_regex=r"^https?://.*"`) are completely eliminated.
+- CORS is strictly locked to explicitly declared origins (`ALLOWED_ORIGINS` in `.env`), preventing malicious third-party websites from making credentialed cross-origin requests to exfiltrate documents or generation outputs.
+
+### 3. API Authentication & Session Isolation
+- **Authentication**: Supports `X-API-Key` header, `Authorization: Bearer <key>`, or URL parameter `api_key` for authenticated binary downloads.
+- **Session Isolation**: Each frontend client automatically generates and maintains a unique session identifier (`X-Session-ID`). Every document, template, and generation job is bound to this identity. Users cannot view, modify, or delete documents belonging to another session.
+
+### 4. Storage & Processing Protections
 - Localhost binding (`127.0.0.1`) only by default.
 - Private storage outside public web directory.
 - No sensitive document text logged in server audit trails.
 - Safe path resolution defending against directory traversal.
+- SHA-256 integrity verification across document extraction, template creation, and output generation.

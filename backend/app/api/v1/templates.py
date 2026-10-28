@@ -32,6 +32,7 @@ from app.services.validation.post_generator_validator import PostGeneratorValida
 from app.core.errors import AppException, AppErrorCode
 from app.core.logging import log_event
 from app.core.config import settings
+from app.core.auth import get_current_identity
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
 
@@ -39,17 +40,30 @@ import uuid
 from app.api.v1.analysis import _analysis_cache
 
 @router.post("", response_model=TemplateDetailDTO, status_code=status.HTTP_201_CREATED)
-def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
+def save_template(
+    req: SaveTemplateRequest,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     doc = db.query(Document).filter(Document.id == req.document_id).first()
     if not doc:
         raise AppException(code=AppErrorCode.DOCUMENT_NOT_FOUND, message="Source document not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and doc.owner_id != "default")) and doc.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to create a template from this document.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     template = Template(
         name=req.name,
         source_document_id=doc.id,
         version=1,
         source_checksum=doc.sha256,
-        status="active"
+        status="active",
+        owner_id=identity
     )
     db.add(template)
     db.flush()
@@ -106,11 +120,17 @@ def save_template(req: SaveTemplateRequest, db: Session = Depends(get_db)):
     db.refresh(template)
 
     log_event("TEMPLATE_SAVED", template.id)
-    return get_template(template.id, db)
+    return get_template(template.id, identity, db)
 
 @router.get("", response_model=List[TemplateSummaryDTO])
-def list_templates(db: Session = Depends(get_db)):
-    templates = db.query(Template).filter(Template.status == "active").order_by(Template.created_at.desc()).all()
+def list_templates(
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
+    query = db.query(Template).filter(Template.status == "active")
+    if settings.REQUIRE_AUTH or identity != "default":
+        query = query.filter((Template.owner_id == identity) | (Template.owner_id == "default") | (Template.owner_id == None))
+    templates = query.order_by(Template.created_at.desc()).all()
     summaries = []
     for t in templates:
         summaries.append(
@@ -129,10 +149,22 @@ def list_templates(db: Session = Depends(get_db)):
     return summaries
 
 @router.get("/{id}", response_model=TemplateDetailDTO)
-def get_template(id: str, db: Session = Depends(get_db)):
+def get_template(
+    id: str,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     t = db.query(Template).filter(Template.id == id).first()
     if not t:
         raise AppException(code=AppErrorCode.TEMPLATE_NOT_FOUND, message="Template not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and t.owner_id != "default")) and t.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to access this template.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     var_dtos: List[VariableDTO] = []
     occ_dtos: List[OccurrenceDTO] = []
@@ -189,7 +221,25 @@ def get_template(id: str, db: Session = Depends(get_db)):
     )
 
 @router.patch("/{id}/variables/{variable_id}", response_model=VariableDTO)
-def update_variable(id: str, variable_id: str, req: UpdateVariableRequest, db: Session = Depends(get_db)):
+def update_variable(
+    id: str,
+    variable_id: str,
+    req: UpdateVariableRequest,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
+    t = db.query(Template).filter(Template.id == id).first()
+    if not t:
+        raise AppException(code=AppErrorCode.TEMPLATE_NOT_FOUND, message="Template not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and t.owner_id != "default")) and t.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to modify this template.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
+
     tvar = db.query(TemplateVariable).filter(TemplateVariable.id == variable_id, TemplateVariable.template_id == id).first()
     if not tvar:
         raise AppException(code=AppErrorCode.INVALID_VALUE, message="Variable not found in template", status_code=status.HTTP_404_NOT_FOUND)
@@ -226,10 +276,23 @@ def update_variable(id: str, variable_id: str, req: UpdateVariableRequest, db: S
     )
 
 @router.post("/{id}/generate", response_model=GenerationJobResponse)
-def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depends(get_db)):
+def generate_document(
+    id: str,
+    req: GenerateDocumentRequest,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     t = db.query(Template).filter(Template.id == id).first()
     if not t:
         raise AppException(code=AppErrorCode.TEMPLATE_NOT_FOUND, message="Template not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and t.owner_id != "default")) and t.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to generate from this template.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     doc = t.source_document
     if not doc:
@@ -303,7 +366,8 @@ def generate_document(id: str, req: GenerateDocumentRequest, db: Session = Depen
         template_id=t.id,
         template_version=t.version,
         output_format=target_format,
-        status="processing"
+        status="processing",
+        owner_id=identity
     )
     db.add(job)
     db.flush()

@@ -1,11 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.core.config import settings
+from app.core.auth import get_current_identity
 from app.schemas.api_schemas import AppSettingsDTO, UpdateSettingsRequest
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 @router.get("", response_model=AppSettingsDTO)
-def get_settings():
+def get_settings(identity: str = Depends(get_current_identity)):
     return AppSettingsDTO(
         ai_provider=settings.AI_PROVIDER,
         has_gemini_key=bool(settings.GEMINI_API_KEY),
@@ -17,7 +18,7 @@ def get_settings():
     )
 
 @router.post("", response_model=AppSettingsDTO)
-def update_settings(req: UpdateSettingsRequest):
+def update_settings(req: UpdateSettingsRequest, identity: str = Depends(get_current_identity)):
     if req.ai_provider is not None:
         settings.AI_PROVIDER = req.ai_provider
     if req.gemini_api_key is not None:
@@ -27,4 +28,4 @@ def update_settings(req: UpdateSettingsRequest):
     if req.file_retention_days is not None:
         settings.FILE_RETENTION_DAYS = req.file_retention_days
 
-    return get_settings()
+    return get_settings(identity=identity)

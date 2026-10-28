@@ -11,6 +11,8 @@ from app.services.analysis.candidate_detector import CandidateDetector
 from app.services.analysis.ai_adapter import get_ai_adapter
 from app.core.errors import AppException, AppErrorCode
 from app.core.logging import log_event
+from app.core.auth import get_current_identity
+from app.core.config import settings
 
 router = APIRouter(tags=["Analysis"])
 
@@ -18,10 +20,22 @@ router = APIRouter(tags=["Analysis"])
 _analysis_cache: Dict[str, AnalysisResultDTO] = {}
 
 @router.post("/documents/{id}/analyze", response_model=AnalysisResultDTO)
-async def analyze_document(id: str, db: Session = Depends(get_db)):
+async def analyze_document(
+    id: str,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     doc = db.query(Document).filter(Document.id == id).first()
     if not doc:
         raise AppException(code=AppErrorCode.DOCUMENT_NOT_FOUND, message="Document not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and doc.owner_id != "default")) and doc.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to analyze this document.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     file_path = Path(doc.storage_path)
     if not file_path.exists():
@@ -54,15 +68,30 @@ async def analyze_document(id: str, db: Session = Depends(get_db)):
     return result
 
 @router.get("/analysis/{id}", response_model=AnalysisResultDTO)
-async def get_analysis_result(id: str, db: Session = Depends(get_db)):
+async def get_analysis_result(
+    id: str,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
+    doc = db.query(Document).filter(Document.id == id).first()
+    if not doc:
+        raise AppException(code=AppErrorCode.DOCUMENT_NOT_FOUND, message="Document not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and doc.owner_id != "default")) and doc.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to access analysis for this document.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
+
     if id in _analysis_cache:
         return _analysis_cache[id]
 
-    doc = db.query(Document).filter(Document.id == id).first()
-    if doc and doc.analysis_json:
+    if doc.analysis_json:
         result = AnalysisResultDTO(**doc.analysis_json)
         _analysis_cache[id] = result
         return result
     
     # If not previously analyzed or cached, run analysis
-    return await analyze_document(id, db)
+    return await analyze_document(id, identity, db)

@@ -16,6 +16,8 @@ class AppErrorCode:
     OVERLAPPING_EDIT = "OVERLAPPING_EDIT"
     AI_PROVIDER_ERROR = "AI_PROVIDER_ERROR"
     SCANNED_PDF_NO_TEXT = "SCANNED_PDF_NO_TEXT"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    FORBIDDEN = "FORBIDDEN"
 
 class AppException(HTTPException):
     def __init__(self, code: str, message: str, status_code: int = status.HTTP_400_BAD_REQUEST, details: dict = None):

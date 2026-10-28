@@ -21,6 +21,19 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     run_migrations()
     logger.info(f"Storage directory: {settings.base_storage_path}")
+
+    # Security audit notifications on startup
+    if settings.SECRET_KEY == "local-secret-key-antigravity":
+        logger.warning(
+            "SECURITY NOTICE: Using default development SECRET_KEY. "
+            "For production deployments, set a random 32+ character SECRET_KEY in your environment."
+        )
+
+    if settings.REQUIRE_AUTH or settings.API_KEY:
+        logger.info("SECURITY: API Authentication is ENABLED (API Key required).")
+    else:
+        logger.info("SECURITY: Running in Local-First Development Mode (no API key enforced).")
+
     logger.info("AI Document Reuse Platform initialized successfully.")
     yield
 
@@ -31,13 +44,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration allowing local dev and Cloudflare deployment
+# CORS configuration strictly bound to explicit allowlist (no wildcard origin regex)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins_list + ["https://ai-document-reuse.mokulakshithreddy.workers.dev"],
-    allow_origin_regex=r"^https?://.*",
+    allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

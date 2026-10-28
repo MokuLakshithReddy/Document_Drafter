@@ -23,6 +23,7 @@ class Document(Base):
     page_count = Column(Integer, default=1)
     error_message = Column(Text, nullable=True)
     analysis_json = Column(JSON, nullable=True)
+    owner_id = Column(String, default="default", index=True, nullable=True)
 
     templates = relationship("Template", back_populates="source_document", cascade="all, delete-orphan")
 
@@ -35,6 +36,7 @@ class Template(Base):
     version = Column(Integer, default=1)
     status = Column(String, default="active") # active, archived
     source_checksum = Column(String, nullable=False)
+    owner_id = Column(String, default="default", index=True, nullable=True)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -83,6 +85,7 @@ class GenerationJob(Base):
     error_code = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
     validation_report = Column(JSON, nullable=True)
+    owner_id = Column(String, default="default", index=True, nullable=True)
 
     template = relationship("Template", back_populates="generation_jobs")
     values = relationship("GenerationValue", back_populates="job", cascade="all, delete-orphan")

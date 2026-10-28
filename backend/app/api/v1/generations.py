@@ -8,12 +8,21 @@ from app.models.entities import GenerationJob, GeneratedDocument, Template
 from app.schemas.api_schemas import GenerationJobResponse, ValidationReport
 from app.core.errors import AppException, AppErrorCode
 from app.core.logging import log_event
+from app.core.auth import get_current_identity
+from app.core.config import settings
 
 router = APIRouter(prefix="/generations", tags=["Generations"])
 
 @router.get("", response_model=List[GenerationJobResponse])
-def list_generations(limit: int = 20, db: Session = Depends(get_db)):
-    jobs = db.query(GenerationJob).order_by(GenerationJob.created_at.desc()).limit(limit).all()
+def list_generations(
+    limit: int = 20,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
+    query = db.query(GenerationJob)
+    if settings.REQUIRE_AUTH or identity != "default":
+        query = query.filter((GenerationJob.owner_id == identity) | (GenerationJob.owner_id == "default") | (GenerationJob.owner_id == None))
+    jobs = query.order_by(GenerationJob.created_at.desc()).limit(limit).all()
     results = []
     for j in jobs:
         val_rep = ValidationReport(**j.validation_report) if j.validation_report else None
@@ -33,10 +42,22 @@ def list_generations(limit: int = 20, db: Session = Depends(get_db)):
     return results
 
 @router.get("/{id}", response_model=GenerationJobResponse)
-def get_generation_job(id: str, db: Session = Depends(get_db)):
+def get_generation_job(
+    id: str,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     job = db.query(GenerationJob).filter(GenerationJob.id == id).first()
     if not job:
         raise AppException(code=AppErrorCode.JOB_NOT_FOUND, message="Generation job not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and job.owner_id != "default")) and job.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to view this generation job.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     val_rep = ValidationReport(**job.validation_report) if job.validation_report else None
     return GenerationJobResponse(
@@ -52,10 +73,22 @@ def get_generation_job(id: str, db: Session = Depends(get_db)):
     )
 
 @router.get("/{id}/download")
-def download_generated_artifact(id: str, db: Session = Depends(get_db)):
+def download_generated_artifact(
+    id: str,
+    identity: str = Depends(get_current_identity),
+    db: Session = Depends(get_db)
+):
     job = db.query(GenerationJob).filter(GenerationJob.id == id).first()
     if not job:
         raise AppException(code=AppErrorCode.JOB_NOT_FOUND, message="Generation job not found", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Ownership check
+    if (settings.REQUIRE_AUTH or (identity != "default" and job.owner_id != "default")) and job.owner_id != identity:
+        raise AppException(
+            code=AppErrorCode.FORBIDDEN,
+            message="Access denied: you do not have permission to download this artifact.",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     if job.status != "completed":
         raise AppException(
