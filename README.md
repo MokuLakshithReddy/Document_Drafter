@@ -21,6 +21,35 @@ A private, local-first document reuse workspace. A user uploads an existing DOCX
 
 ---
 
+## Document transformation pipeline
+
+~~~mermaid
+flowchart TD
+    A["Upload DOCX or text-based PDF"] --> B["Extract structure and source locations"]
+    B --> C["Detect candidate fields: names, dates, IDs, amounts"]
+    C --> D["Review and map exact occurrences"]
+    D --> E["User enters selected replacements"]
+    E --> F["Format-preserving document replacement"]
+    F --> G["Re-extract and verify output"]
+    G --> H{"Only approved fields changed?"}
+    H -->|Yes| I["Generate downloadable document"]
+    H -->|No| J["Block output and report validation error"]
+~~~
+
+### Proof-oriented design
+
+The central invariant is **blank or omitted replacement values leave source content unchanged**. The implementation plan and architecture describe:
+- DOCX extraction across paragraphs, runs, tables, headers, and footers.
+- PDF text extraction with page and bounding-box locations; scanned PDFs without OCR are explicitly unsupported.
+- Source checksums and occurrence mapping to avoid modifying the wrong file or overlapping edits.
+- Post-generation re-extraction to verify requested replacements and detect unauthorized text changes.
+- A deterministic provider-independent fallback when no external AI key is configured.
+
+See the [20-case acceptance matrix and test plan](docs/TEST_PLAN.md), [architecture](docs/ARCHITECTURE.md), and [security notes](docs/SECURITY.md). These documents describe the intended verification coverage; the current CI result is the source of truth for which checks pass on a given commit.
+
+**Why it matters:** reusing an existing document should not mean rewriting everything. The system is designed to change only explicitly selected fields while protecting the rest of the original content.
+
+---
 ## Prerequisites
 - **Node.js**: v18+ (tested with v24)
 - **npm**: v9+ (or `npm.cmd` on Windows)
