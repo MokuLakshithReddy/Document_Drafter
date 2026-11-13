@@ -1,5 +1,8 @@
 # AI Document Reuse Platform
 
+[![Stars](https://img.shields.io/github/stars/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/stargazers) [![Forks](https://img.shields.io/github/forks/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/forks) [![Open Issues](https://img.shields.io/github/issues/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/issues) [![Last Commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/commits/main)
+
+
 ## Overview
 A private, local-first document reuse workspace. A user uploads an existing DOCX or text-based PDF, the system extracts structure and detects likely changeable fields (names, dates, amounts, roles, addresses, IDs), lets the user enter replacement values, and generates a new document where only fields with non-empty replacement values are modified while leaving all other document content completely unchanged.
 
