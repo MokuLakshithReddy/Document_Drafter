@@ -1,5 +1,8 @@
 # AI Document Reuse Platform
 
+[![Stars](https://img.shields.io/github/stars/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/stargazers) [![Forks](https://img.shields.io/github/forks/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/forks) [![Open Issues](https://img.shields.io/github/issues/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/issues) [![Last Commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/Document_Drafter?style=flat-square)](https://github.com/MokuLakshithReddy/Document_Drafter/commits/main)
+
+
 ## Overview
 A private, local-first document reuse workspace. A user uploads an existing DOCX or text-based PDF, the system extracts structure and detects likely changeable fields (names, dates, amounts, roles, addresses, IDs), lets the user enter replacement values, and generates a new document where only fields with non-empty replacement values are modified while leaving all other document content completely unchanged.
 
@@ -21,6 +24,35 @@ A private, local-first document reuse workspace. A user uploads an existing DOCX
 
 ---
 
+## Document transformation pipeline
+
+~~~mermaid
+flowchart TD
+    A["Upload DOCX or text-based PDF"] --> B["Extract structure and source locations"]
+    B --> C["Detect candidate fields: names, dates, IDs, amounts"]
+    C --> D["Review and map exact occurrences"]
+    D --> E["User enters selected replacements"]
+    E --> F["Format-preserving document replacement"]
+    F --> G["Re-extract and verify output"]
+    G --> H{"Only approved fields changed?"}
+    H -->|Yes| I["Generate downloadable document"]
+    H -->|No| J["Block output and report validation error"]
+~~~
+
+### Proof-oriented design
+
+The central invariant is **blank or omitted replacement values leave source content unchanged**. The implementation plan and architecture describe:
+- DOCX extraction across paragraphs, runs, tables, headers, and footers.
+- PDF text extraction with page and bounding-box locations; scanned PDFs without OCR are explicitly unsupported.
+- Source checksums and occurrence mapping to avoid modifying the wrong file or overlapping edits.
+- Post-generation re-extraction to verify requested replacements and detect unauthorized text changes.
+- A deterministic provider-independent fallback when no external AI key is configured.
+
+See the [20-case acceptance matrix and test plan](docs/TEST_PLAN.md), [architecture](docs/ARCHITECTURE.md), and [security notes](docs/SECURITY.md). These documents describe the intended verification coverage; the current CI result is the source of truth for which checks pass on a given commit.
+
+**Why it matters:** reusing an existing document should not mean rewriting everything. The system is designed to change only explicitly selected fields while protecting the rest of the original content.
+
+---
 ## Prerequisites
 - **Node.js**: v18+ (tested with v24)
 - **npm**: v9+ (or `npm.cmd` on Windows)
