@@ -6,6 +6,32 @@ A private, local-first document reuse workspace. A user uploads an existing DOCX
 ## Core Principle
 **If the user enters a non-empty new value, replace the corresponding original value. If the user leaves the field blank or omits it, leave the original document content unchanged.**
 
+## At a glance
+
+![GitHub stars](https://img.shields.io/github/stars/MokuLakshithReddy/Document_Drafter?style=flat-square&label=stars)
+![GitHub forks](https://img.shields.io/github/forks/MokuLakshithReddy/Document_Drafter?style=flat-square&label=forks)
+![Open issues](https://img.shields.io/github/issues/MokuLakshithReddy/Document_Drafter?style=flat-square&label=open%20issues)
+![Last commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/Document_Drafter?style=flat-square)
+
+**Why it matters:** Reusing a previous document should not require rebuilding it from scratch—or silently changing parts the user did not ask to change. The core guarantee is conservative: only non-empty replacement values are applied; blank or omitted fields preserve the original content.
+
+## Document transformation flow
+
+```mermaid
+flowchart TD
+    A["Upload DOCX or text-based PDF"] --> B["Validate file type, size and limits"]
+    B --> C["Extract structure and text"]
+    C --> D["Detect candidate fields"]
+    D --> E["User reviews and enters replacements"]
+    E --> F["Locate exact occurrences"]
+    F --> G["Replace only approved non-empty values"]
+    G --> H["Verify document structure and layout"]
+    H --> I["Generate updated document"]
+```
+
+**Evidence boundary:** The README documents unit/integration tests and a frontend production build. It does not publish a measured field-detection accuracy or document-fidelity benchmark, so none is implied here.
+
+---
 ## Architecture & Technology Stack
 - **Frontend**: React 18 + TypeScript + Vite + Tailwind/Modern CSS + Lucide Icons
 - **Backend API**: Python FastAPI + Pydantic v2 + Uvicorn (bound to `127.0.0.1`)
